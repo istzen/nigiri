@@ -42,7 +42,32 @@ private:
 }
 };
 
-pareto_set<journey> a_star(timetable const& tt,
+template <bool UseLowerBounds>
+a_star<UseLowerBounds>::a_star(
+  timetable const& tt,
+  rt_timetable const*,
+  a_star_state& state,
+  bitvec const& is_dest,
+  std::array<bitvec, kMaxVias> const&,
+  std::vector<std::uint16_t> const& dist_to_dest,
+  hash_map<location_idx_t, std::vector<td_offset>> const&,
+  std::vector<std::uint16_t> const& lb,
+  std::vector<via_stop> const&,
+  day_idx_t base,
+  clasz_mask_t,
+  bool,
+  bool,
+  bool,
+  transfer_time_settings) : 
+    tt_{tt},
+    state_{state},
+    is_dest_{is_dest},
+    dist_to_dest_{dist_to_dest},
+    lb_{lb},
+    base_{base - 5}; // TODO: in query engine this is QUERY_DAY_SHIFT check why needed and what is does
+    // TODO: initialize other stuff
+
+pareto_set<journey> prelime_algo(timetable const& tt,
                tb::tb_data const& tbd,
                unixtime_t const start_time,
                location_idx_t const source,
@@ -119,7 +144,7 @@ pareto_set<journey> a_star(timetable const& tt,
 
     // Update transfers of s
     for(auto const t : tbd.segment_transfers_[qe.segment_]){
-      
+
     }
   }
 
