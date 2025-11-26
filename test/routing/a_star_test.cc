@@ -1,11 +1,11 @@
-#include "gtest/gtest.h"
 #include <chrono>
+#include "gtest/gtest.h"
 
 #include "nigiri/loader/gtfs/load_timetable.h"
 #include "nigiri/loader/init_finish.h"
-#include "nigiri/routing/tb/preprocess.h"
 #include "nigiri/routing/a_star/a_star.h"
 #include "nigiri/routing/search.h"
+#include "nigiri/routing/tb/preprocess.h"
 
 using namespace date;
 using namespace nigiri;
@@ -23,20 +23,20 @@ timetable load_gtfs(auto const& files) {
 }
 
 a_star& a_star_algo(timetable const& tt,
-                   tb::tb_data const& tbd,
-                   routing::query q) {
+                    tb::tb_data const& tbd,
+                    routing::query q) {
   static auto search_state = routing::search_state{};
   auto algo_state = a_star_state{tbd};
-  return routing::search<direction::kForward, a_star>{
-      tt, nullptr, search_state, algo_state, std::move(q)}.get_algo();
+  return routing::search<direction::kForward, a_star>{tt, nullptr, search_state,
+                                                      algo_state, std::move(q)}
+      .get_algo();
 }
 
-a_star a_star_algo(
-    timetable const& tt,
-    a_star_state& state,
-    std::string_view from,
-    std::string_view to,
-    routing::start_time_t const time) {
+a_star a_star_algo(timetable const& tt,
+                   a_star_state& state,
+                   std::string_view from,
+                   std::string_view to,
+                   routing::start_time_t const time) {
   auto src = source_idx_t{0};
   auto q = routing::query{
       .start_time_ = time,
@@ -46,8 +46,9 @@ a_star a_star_algo(
           {tt.locations_.location_id_to_idx_.at({to, src}), 0_minutes, 0U}}};
   src = source_idx_t{1};
   static auto search_state = routing::search_state{};
-  return routing::search<direction::kForward, a_star>{
-      tt, nullptr, search_state, state, std::move(q)}.get_algo();
+  return routing::search<direction::kForward, a_star>{tt, nullptr, search_state,
+                                                      state, std::move(q)}
+      .get_algo();
 }
 
 mem_dir same_day_transfer_files_as() {
@@ -90,21 +91,23 @@ R2_MON,12:00:00,12:00:00,S2,1,0,0
 }
 
 TEST(a_star, add_start) {
-delta d{0};
-day_index_map map;
-segment_idx_t key{0};
-day_idx_t value{d.days()};
-map.emplace(key, value);
+  delta d{0};
+  day_index_map map;
+  segment_idx_t key{0};
+  day_idx_t value{d.days()};
+  map.emplace(key, value);
 
   auto const tt = load_gtfs(same_day_transfer_files_as);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
 
-  auto start_time = unixtime_t{sys_days{February / 28 / 2021} + std::chrono::hours{23}};
+  auto start_time =
+      unixtime_t{sys_days{February / 28 / 2021} + std::chrono::hours{23}};
   auto algo_state = a_star_state{tbd};
   a_star algo = a_star_algo(tt, algo_state, "S0", "S2", start_time);
   auto size = tt.locations_.location_id_to_idx_.size();
   tt.locations_.location_id_to_idx_.find(location_id{"S0", source_idx_t{size}});
-  auto const location_idx = tt.locations_.location_id_to_idx_.at({"S0", source_idx_t{0}});
+  auto const location_idx =
+      tt.locations_.location_id_to_idx_.at({"S0", source_idx_t{0}});
   algo.add_start(location_idx, start_time);
   auto pq = algo.get_state().pq_;
   EXPECT_EQ(pq.size(), 2U);
@@ -115,6 +118,8 @@ map.emplace(key, value);
   EXPECT_EQ(qe2.segment_, segment_idx_t{2});
   EXPECT_EQ(qe.transfers_, 0U);
   EXPECT_EQ(qe.transfers_, 0U);
-  EXPECT_EQ(algo.get_state().pred_table_.at(qe.segment_), a_star_state::sartSegmentPredecessor);
-  EXPECT_EQ(algo.get_state().pred_table_.at(qe2.segment_), a_star_state::sartSegmentPredecessor);
+  EXPECT_EQ(algo.get_state().pred_table_.at(qe.segment_),
+            a_star_state::sartSegmentPredecessor);
+  EXPECT_EQ(algo.get_state().pred_table_.at(qe2.segment_),
+            a_star_state::sartSegmentPredecessor);
 }
