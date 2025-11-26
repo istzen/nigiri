@@ -22,9 +22,9 @@ timetable load_gtfs(auto const& files) {
   return tt;
 }
 
-a_star& a_star_algo(timetable const& tt,
-                    tb::tb_data const& tbd,
-                    routing::query q) {
+a_star a_star_algo(timetable const& tt,
+                   tb::tb_data const& tbd,
+                   routing::query q) {
   static auto search_state = routing::search_state{};
   auto algo_state = a_star_state{tbd};
   return routing::search<direction::kForward, a_star>{tt, nullptr, search_state,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "nigiri/types.h"
+
 namespace nigiri::routing {
 
 static constexpr auto const maxASTravelTime = 1_days;
