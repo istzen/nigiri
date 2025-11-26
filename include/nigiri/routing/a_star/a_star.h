@@ -43,8 +43,6 @@ struct cost_function {
     return (time_travelled + transfer_factor_ * q.transfers_);
   }
 
-
-  private:
   const arrival_time_map* const arrival_time_; // segment -> arrival_time
   const day_index_map* const arrival_day_; // segment -> arrival_day
   float const transfer_factor_; // default value
@@ -76,8 +74,11 @@ struct a_star_stats {
 };
 
 struct a_star_state {
-  a_star_state(tb_data const& tbd, cost_function const& cf)
-      : tbd_{tbd}, pq_{maxASTravelTime.count(), cf} {
+  // TODO: maybe change to different value like invalid - 1
+  static constexpr auto const sartSegmentPredecessor = segment_idx_t::invalid();
+
+  a_star_state(tb_data const& tbd)
+      : tbd_{tbd}, pq_{maxASTravelTime.count(), cost_function{minutes_after_midnight_t{0}, day_idx_t{0}, 1.0F, &arrival_time_, &arrival_day_}} {
     end_reachable_.resize(tbd.segment_transfers_.size());
       }
   
@@ -103,20 +104,19 @@ struct a_star_state {
 
   tb_data const& tbd_; // preprocessed tb data
 
-  dial<queue_entry, cost_function> pq_; // priority_queue
   arrival_time_map arrival_time_; // segment -> arrival_time
   day_index_map arrival_day_; // segment -> arrival_day
   pred_table pred_table_; // predecessor table
   hash_map<segment_idx_t, duration_t> dist_to_dest_;; // segment -> distance to destination
+  dial<queue_entry, cost_function> pq_; // priority_queue
   bitvec_map<segment_idx_t> end_reachable_; // segments from which the destination is reachable
 };
 
-template <bool UseLowerBounds>
 struct a_star {
   using algo_state_t = a_star_state;
   using algo_stats_t = a_star_stats;
+  static constexpr bool kUseLowerBounds = false;
 
-  static constexpr bool kUseLowerBounds = UseLowerBounds;
   static constexpr auto const kUnreachable =
       std::numeric_limits<std::uint16_t>::max();
   
