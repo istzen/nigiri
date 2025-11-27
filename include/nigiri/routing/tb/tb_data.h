@@ -1,8 +1,8 @@
 #pragma once
 
-#include <iosfwd>
-
 #include "nigiri/types.h"
+
+#include <iosfwd>
 
 #include "utl/verify.h"
 
@@ -38,11 +38,12 @@ struct transfer {
     return h.combine(cista::hash("tb_data::transfer::v1"));
   }
 
-  segment_idx_t to_segment_;
-  tb_bitfield_idx_t traffic_days_;
-  route_idx_t route_;
-  std::uint16_t transport_offset_;
-  std::uint16_t to_segment_offset_ : 12;
+  segment_idx_t to_segment_;  // segment which the transfer leads to
+  tb_bitfield_idx_t traffic_days_;  // Days the transfer is available
+  route_idx_t route_;  // route the tranport taking this transfer belongs to
+  std::uint16_t transport_offset_;  // index of transport taking the route
+  std::uint16_t to_segment_offset_
+      : 12;  // position of to_segment_ within transport
 
 private:
   // Shift amount between trip t and trip u:
@@ -65,7 +66,10 @@ struct tb_data {
   profile_idx_t prf_idx_;
   vector_map<transport_idx_t, segment_idx_t> transport_first_segment_;
   vecvec<segment_idx_t, transfer> segment_transfers_;
-  vector_map<segment_idx_t, transport_idx_t> segment_transports_;
+  vector_map<segment_idx_t, transport_idx_t>
+      segment_transports_;  // * means one segment belongs to exactly one
+                            // * transport and a transport consists of multiple
+                            // * segments
   vector_map<tb_bitfield_idx_t, bitfield> bitfields_;
 };
 
