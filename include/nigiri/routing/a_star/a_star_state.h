@@ -32,7 +32,8 @@ struct queue_entry {
 
 struct a_star_state {
   // TODO: maybe change to different value like invalid - 1
-  static constexpr auto const sartSegmentPredecessor = segment_idx_t::invalid();
+  static constexpr auto const startSegmentPredecessor =
+      segment_idx_t::invalid();
 
   a_star_state(tb_data const& tbd)
       : tbd_{tbd}, pq_{maxASTravelTime.count(), get_bucket_a_star(*this)} {
@@ -42,6 +43,11 @@ struct a_star_state {
   bool better_arrival(queue_entry qe, delta const new_arr) {
     return !arrival_day_.contains(qe.segment_) ||
            cost_function(qe, new_arr) > cost_function(qe);
+  }
+
+  unixtime_t get_dest_time(segment_idx_t s) {
+    auto const arr_day = arrival_day_.find(s);
+    auto const arr_time = arrival_time_.find(s);
   }
 
   // Standard cost function used in pq
@@ -60,23 +66,19 @@ struct a_star_state {
     return cost_function(arr.days(), arr.mam(), qe.transfers_);
   }
 
-  // TODO: check if needed
-  void update_segment_times(segment_idx_t const s, duration_t const d) {
-    if (auto const it_pt = pred_table_.find(s); it_pt != end(pred_table_)) {
-      // Update arr_time and arr_day based on the time of pred if improved
-      auto const pred = it_pt->second;
-      // TODO: can we assume that this is present?
-      auto const it_at_p = arrival_time_.find(pred);
-      auto const new_arr_time =
-          static_cast<minutes_after_midnight_t>(it_at_p->second + d);
-      auto [it_at_s, inserted] = arrival_time_.try_emplace(s, new_arr_time);
-      if (!inserted) {
-        it_at_s->second = std::min(it_at_s->second, new_arr_time);
-      }
-    } else {
-      // s is a starting segment and thus has no pred
-      // TODO: fix
-      arrival_time_.emplace(s, d);
+  void update_segment(segment_idx_t const s,
+                      delta const new_arr,
+                      segment_idx_t pred,
+                      uint8_t transfers) {
+    // check if the arrival time is better
+    if (better_arrival(queue_entry{s, transfers}, new_arr)) {
+      // Update arrival time
+      arrival_day_.insert_or_assign(s, day_idx_t{new_arr.days()});
+      arrival_time_.insert_or_assign(s,
+                                     minutes_after_midnight_t{new_arr.mam()});
+      // Update Predecessor Table
+      pred_table_.insert_or_assign(s, pred);
+      pq_.push(queue_entry{s, transfers});
     }
   };
 
@@ -100,7 +102,7 @@ struct a_star_state {
     }
 
   private:
-    a_star_state const& state_;  // preprocessed tb data
+    a_star_state const& state_;
   };
 
   tb_data const& tbd_;  // preprocessed tb data
@@ -123,7 +125,8 @@ private:
   uint16_t start_time_ = 0;  // minutes_after_midnight_t of start_time
 
   // Refactored part of cost function
-  uint16_t cost_function(uint16_t const days, uint16_t const mam,
+  uint16_t cost_function(uint16_t const days,
+                         uint16_t const mam,
                          uint8_t const transfers) const {
     auto const val = (days - start_day_) * 24 * 60 + mam - start_time_ +
                      transfer_factor_ * transfers;

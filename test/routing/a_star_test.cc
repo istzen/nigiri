@@ -163,9 +163,9 @@ TEST(a_star, add_start) {
   EXPECT_EQ(qe2.transfers_, 0U);
   EXPECT_EQ(qe3.transfers_, 0U);
   EXPECT_EQ(algo.get_state().pred_table_.at(qe.segment_),
-            a_star_state::sartSegmentPredecessor);
+            a_star_state::startSegmentPredecessor);
   EXPECT_EQ(algo.get_state().pred_table_.at(qe2.segment_),
-            a_star_state::sartSegmentPredecessor);
+            a_star_state::startSegmentPredecessor);
   EXPECT_EQ(algo.get_state().pred_table_.at(qe3.segment_),
-            a_star_state::sartSegmentPredecessor);
+            a_star_state::startSegmentPredecessor);
 }

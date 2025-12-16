@@ -91,11 +91,11 @@ a_star::a_star(timetable const& tt,
   }
 };
 
-void a_star::execute(unixtime_t const,
+void a_star::execute(unixtime_t const start_time,
                      std::uint8_t const max_transfers,
                      unixtime_t const worst_time_at_dest,
                      profile_idx_t const,
-                     journey&) {
+                     pareto_set<journey>& results) {
   // TODO: figure out how debug print works
   delta const worst_delta =
       delta(to_idx(tt_.day_idx_mam(worst_time_at_dest).first),
@@ -118,10 +118,14 @@ void a_star::execute(unixtime_t const,
     // Check if current segment reaches destination
     if (state_.end_reachable_.test(segment)) [[unlikely]] {
       as_debug("Reached destination via segment {}", segment);
-      // TODO: what do we do here
+      results.add(
+          {.legs_{},
+           .start_time_ = start_time,
+           .dest_time_ = state_.get_dest_time(segment),
+           .dest_ = location_idx_t::invalid(),
+           .transfers_ = static_cast<std::uint8_t>(current.transfers_)});
       return;
     }
-    // TODO: Find next segment in transport and handle that
     // Handle next segment for transport if exists
     auto const transport_current = state_.tbd_.segment_transports_[segment];
     auto const rel_segment =
@@ -134,17 +138,9 @@ void a_star::execute(unixtime_t const,
       // TODO: How to handle costs of dist_to_dest for dest segments?
       // * props gets unnecessary for second part as we have the heuristic in
       // * cost function
-      if (worst_delta < next_stop_arr ||
-          state_.better_arrival(current, next_stop_arr)) {
-        state_.arrival_day_.insert_or_assign(next_segment,
-                                             day_idx_t{next_stop_arr.days()});
-        state_.arrival_time_.insert_or_assign(
-            next_segment, minutes_after_midnight_t{next_stop_arr.mam()});
-        // Update Predecessor Table
-        state_.pred_table_.insert_or_assign(next_segment,
-                                            state_.sartSegmentPredecessor);
-        state_.pq_.push(queue_entry{
-            next_segment, static_cast<uint8_t>(current.transfers_ + 1)});
+      if (worst_delta < next_stop_arr) {
+        state_.update_segment(next_segment, next_stop_arr, segment,
+                              static_cast<uint8_t>(current.transfers_));
       }
     }
     // Handle transfers
@@ -177,15 +173,8 @@ void a_star::execute(unixtime_t const,
       // * cost function
       if (worst_delta < new_arrival_time ||
           state_.better_arrival(current, new_arrival_time)) {
-        state_.arrival_day_.insert_or_assign(
-            new_segment, day_idx_t{new_arrival_time.days()});
-        state_.arrival_time_.insert_or_assign(
-            new_segment, minutes_after_midnight_t{new_arrival_time.mam()});
-        // Update Predecessor Table
-        state_.pred_table_.insert_or_assign(new_segment,
-                                            state_.sartSegmentPredecessor);
-        state_.pq_.push(queue_entry{
-            new_segment, static_cast<uint8_t>(current.transfers_ + 1)});
+        state_.update_segment(new_segment, new_arrival_time, segment,
+                              static_cast<uint8_t>(current.transfers_ + 1));
       }
     }
   }
@@ -217,28 +206,41 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
 
       auto const start_segment =
           state_.tbd_.transport_first_segment_[et.t_idx_] + i;
-      // TODO: this should be a state method props at least the insert
       // Update Arrival Time and Day
       // * important to use i + 1 as we want the arrival at the second stop of
       // * the segment
       auto const delta = tt_.event_mam(r, et.t_idx_, i + 1, event_type::kArr);
-      state_.arrival_day_.emplace(start_segment, day_idx_t{delta.days()});
-      state_.arrival_time_.emplace(start_segment,
-                                   minutes_after_midnight_t{delta.mam()});
-      // Update Predecessor Table
-      state_.pred_table_.emplace(start_segment, state_.sartSegmentPredecessor);
+      state_.update_segment(start_segment, delta,
+                            state_.startSegmentPredecessor, 0U);
+      // TODO: this could be reactivated for performance reasons
+      // state_.arrival_day_.emplace(start_segment, day_idx_t{delta.days()});
+      // state_.arrival_time_.emplace(start_segment,
+      //                              minutes_after_midnight_t{delta.mam()});
+      // // Update Predecessor Table
+      // state_.pred_table_.emplace(start_segment,
+      // state_.startSegmentPredecessor);
 
-      // Enqueue Element
-      std::cout << "Adding start segment " << start_segment.v_ << " to PQ\n";
-      state_.pq_.push(queue_entry{start_segment, 0U});
+      // // Enqueue Element
+      // state_.pq_.push(queue_entry{start_segment, 0U});
     }
   }
 }
 
-// void a_star::reconstruct(query const& q,
-//                                          journey& j) const {
-//  // TODO: implement reconstruct
-// }
+void a_star::reconstruct(query const& q, journey& j) const {
+  // TODO: implement reconstruct
+  // Find dest segment
+  // TODO: check how to find segment, should be the segment with both
+  // end_reachable and settled_segments set
+  auto const dest_segment = segment_idx_t{0};
+  auto const pred = state_.pred_table_.at(dest_segment);
+  // TODO: do last leg depending on the dest_segment
+
+  // TODO: transportation legs
+  while (pred != state_.startSegmentPredecessor) {
+  }
+
+  // TODO: first leg
+}
 
 }  // namespace routing
 }  // namespace nigiri

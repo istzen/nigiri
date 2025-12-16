@@ -38,12 +38,12 @@ struct a_star {
   a_star(
       timetable const&,  // timetable
       rt_timetable const*,  // rt timetable
-      a_star_state&,  // algo state // TODO: what is this used for?
+      a_star_state&,  // algo state
       bitvec const& is_dest,  // bitvec of destination segments
       std::array<bitvec, kMaxVias> const&,  // via segments
       std::vector<std::uint16_t> const&
-          dist_to_dest,  // dest segments -> distance to dest in minutes //
-                         // TODO: check if true
+          dist_to_dest,  // dest segments -> distance to dest in minutes for
+                         // dest segments
       hash_map<location_idx_t,
                std::vector<td_offset>> const&,  // location_idx_t -> td_offsets
                                                 // (valid_from, duration,
@@ -59,7 +59,7 @@ struct a_star {
       bool,  // is wheelchair profile
       transfer_time_settings);  // contains tranfer time factor in factor_ and
                                 // min_transfer_time_ // TODO: check if other
-                                // attruibutes are needed
+                                // attributes are needed
 
   algo_stats_t get_stats() const { return stats_; };
 
@@ -75,9 +75,11 @@ struct a_star {
 
   void add_start(location_idx_t, unixtime_t);
 
-  void execute(unixtime_t const start_time, std::uint8_t const max_transfers,
-               unixtime_t const worst_time_at_dest, profile_idx_t const,
-               journey& result);
+  void execute(unixtime_t const start_time,
+               std::uint8_t const max_transfers,
+               unixtime_t const worst_time_at_dest,
+               profile_idx_t const,
+               pareto_set<journey>& results);
 
   void reconstruct(query const& q, journey& j) const;
 
