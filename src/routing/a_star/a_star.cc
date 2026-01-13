@@ -96,7 +96,6 @@ void a_star::execute(unixtime_t const start_time,
                      unixtime_t const worst_time_at_dest,
                      profile_idx_t const,
                      pareto_set<journey>& results) {
-  // TODO: figure out how debug print works
   delta const worst_delta =
       delta(to_idx(tt_.day_idx_mam(worst_time_at_dest).first),
             tt_.day_idx_mam(worst_time_at_dest).second.count());

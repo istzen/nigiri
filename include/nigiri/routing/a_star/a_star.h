@@ -65,13 +65,16 @@ struct a_star {
 
   algo_state_t& get_state() { return state_; };
 
+  // TODO: what exactly should this do?
   void reset_arrivals() {
-    // TODO: implement reset_arrivals
+    state_.settled_segments_.reset();
+    state_.settled_segments_.resize(state_.tbd_.segment_transfers_.size());
+    state_.arrival_day_.clear();
+    state_.arrival_time_.clear();
   };
 
-  void next_start_time() {
-    // TODO: implement next_start_time
-  };
+  // TODO: what exactly should this do?
+  void next_start_time() { state_.reset(); };
 
   void add_start(location_idx_t, unixtime_t);
 

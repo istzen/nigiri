@@ -307,9 +307,10 @@ TEST(a_star, reconstruct_multiple_segment_runs) {
 }
 
 TEST(a_star, execute) {
-  auto const tt = load_gtfs(multiple_segment_run_files);
+  auto const tt = load_gtfs(same_day_transfer_files_as);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  auto start_time = unixtime_t{sys_days{March / 01 / 2021}};
+  auto start_time =
+      unixtime_t{sys_days{February / 28 / 2021} + std::chrono::hours{23}};
   auto algo_state = a_star_state{tbd};
   a_star algo = a_star_algo(tt, algo_state, "S0", "S2", start_time);
   auto size = tt.locations_.location_id_to_idx_.size();
@@ -348,6 +349,7 @@ TEST(a_star, execute) {
   for (auto j : results) {
     algo.reconstruct(routing::query{}, j);
     j.print(std::cout, tt);
+    EXPECT_EQ(j.arrival_time(), j.legs_.back().arr_time_);
   }
   EXPECT_EQ(results.size(), 1U);
 }

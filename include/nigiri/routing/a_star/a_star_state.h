@@ -49,14 +49,6 @@ struct a_star_state {
            cost_function(qe, new_arr) > cost_function(qe);
   }
 
-  // TODO: fix to return correct time using the right offset
-  unixtime_t get_dest_time(segment_idx_t s) {
-    auto const arr_day = arrival_day_.find(s);
-    auto const arr_time = arrival_time_.find(s);
-    return unixtime_t{to_idx(arr_day->second) * 1_days +
-                      duration_t{arr_time->second.count()}};
-  }
-
   // Standard cost function used in pq
   uint16_t cost_function(queue_entry const& qe) const {
     // * Debug asserts
@@ -97,6 +89,11 @@ struct a_star_state {
 
     start_time_ = start_delta.second.count();
     start_day_ = to_idx(start_delta.first);
+  }
+
+  void reset() {
+    pred_table_.clear();
+    pq_.clear();
   }
 
   struct get_bucket_a_star {
