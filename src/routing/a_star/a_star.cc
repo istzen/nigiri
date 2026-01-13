@@ -3,6 +3,7 @@
 #include "fmt/ranges.h"
 
 #include "utl/enumerate.h"
+#include "utl/raii.h"
 
 #include "nigiri/common/dial.h"
 #include "nigiri/routing/get_earliest_transport.h"
@@ -11,8 +12,8 @@
 #include "nigiri/timetable.h"
 #include "nigiri/types.h"
 
-// #define as_debug fmt::println
-#define as_debug(...)
+#define as_debug fmt::println
+// #define as_debug(...)
 
 namespace nigiri {
 namespace routing {
@@ -57,8 +58,8 @@ a_star::a_star(timetable const& tt,
         for (auto const t : tt_.route_transport_ranges_[r]) {
           auto const segment = state_.tbd_.transport_first_segment_[t] + i - 1;
           state_.end_reachable_.set(segment, true);
-          std::cout << "Marking segment " << segment.v_
-                    << " as reaching dest with dist " << d.count() << "\n";
+          as_debug("Marking segment {} as reaching dest with dist {}", segment,
+                   d.count());
 
           auto const it = state_.dist_to_dest_.find(segment);
           if (it == end(state_.dist_to_dest_)) {
@@ -74,7 +75,6 @@ a_star::a_star(timetable const& tt,
   if (dist_to_dest.empty()) /* Destination is stop. */ {
     is_dest_.for_each_set_bit([&](std::size_t const i) {
       auto const l = location_idx_t{i};
-      std::cout << location{tt_, l} << " is dest!\n";
       as_debug("{} is dest!", location{tt_, l});
       mark_dest_segments(l, duration_t{0U});
       for (auto const fp :
@@ -110,18 +110,24 @@ void a_star::execute(unixtime_t const start_time,
     if (state_.settled_segments_.test(segment)) {
       continue;
     }
-    state_.settled_segments_.set(current.segment_, true);
+    state_.settled_segments_.set(segment, true);
 
     as_debug("Visiting segment {} with transfers {}", segment,
              current.transfers_);
 
     // Check if current segment reaches destination
+    // TODO: this does not work always as there could be footpaths needed that
+    // take longer.
     if (state_.end_reachable_.test(segment)) [[unlikely]] {
       as_debug("Reached destination via segment {}", segment);
+      auto const d = base_ + state_.arrival_day_[segment];
+      auto const t = state_.tbd_.segment_transports_[segment];
+      auto const i = static_cast<stop_idx_t>(
+          to_idx(segment - state_.tbd_.transport_first_segment_[t] + (1)));
       results.add(
           {.legs_{},
            .start_time_ = start_time,
-           .dest_time_ = state_.get_dest_time(segment),
+           .dest_time_ = tt_.event_time({t, d}, i, event_type::kArr),
            .dest_ = location_idx_t::invalid(),
            .transfers_ = static_cast<std::uint8_t>(current.transfers_)});
       return;
@@ -164,15 +170,15 @@ void a_star::execute(unixtime_t const start_time,
       }
       // Handle new_segment
       auto const transport_new = state_.tbd_.segment_transports_[new_segment];
-      auto const to = static_cast<stop_idx_t>(to_idx(
-          new_segment - state_.tbd_.transport_first_segment_[transport_new]));
+      auto const to = static_cast<stop_idx_t>(
+          to_idx(new_segment -
+                 state_.tbd_.transport_first_segment_[transport_new] + 1));
       auto const new_arrival_time =
           tt_.event_mam(transport_new, to, event_type::kArr);
       // TODO: How to handle costs of dist_to_dest for dest segments?
       // * props gets unnecessary for second part as we have the heuristic in
       // * cost function
-      if (worst_delta < new_arrival_time ||
-          state_.better_arrival(current, new_arrival_time)) {
+      if (worst_delta < new_arrival_time) {
         state_.update_segment(new_segment, new_arrival_time, segment,
                               static_cast<uint8_t>(current.transfers_ + 1));
       }
@@ -212,6 +218,11 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
       auto const delta = tt_.event_mam(r, et.t_idx_, i + 1, event_type::kArr);
       state_.update_segment(start_segment, delta,
                             state_.startSegmentPredecessor, 0U);
+      as_debug(
+          "Adding start segment {} for location {} with arrival time {} (day "
+          "offset {})",
+          start_segment, location{tt_, l}, t + delta.as_duration(),
+          query_day_offset);
       // TODO: this could be reactivated for performance reasons
       // state_.arrival_day_.emplace(start_segment, day_idx_t{delta.days()});
       // state_.arrival_time_.emplace(start_segment,
@@ -227,19 +238,159 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
 }
 
 void a_star::reconstruct(query const& q, journey& j) const {
-  // TODO: implement reconstruct
-  // Find dest segment
-  // TODO: check how to find segment, should be the segment with both
-  // end_reachable and settled_segments set
-  auto const dest_segment = segment_idx_t{0};
-  auto const pred = state_.pred_table_.at(dest_segment);
-  // TODO: do last leg depending on the dest_segment
+  assert(q.dest_match_mode_ != location_match_mode::kIntermodal &&
+         "Intermodal reconstruct not implemented yet");
+  UTL_FINALLY([&]() { std::reverse(begin(j.legs_), end(j.legs_)); });
 
-  // TODO: transportation legs
-  while (pred != state_.startSegmentPredecessor) {
+  auto const get_transport_info = [&](segment_idx_t const s,
+                                      event_type const ev_type)
+      -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
+    auto const d = base_ + state_.arrival_day_[s];
+    auto const t = state_.tbd_.segment_transports_[s];
+    auto const i = static_cast<stop_idx_t>(
+        to_idx(s - state_.tbd_.transport_first_segment_[t] +
+               (ev_type == event_type::kArr ? 1 : 0)));
+    auto const loc_seq = tt_.route_location_seq_[tt_.transport_route_[t]];
+    return {{t, d},
+            i,
+            stop{loc_seq[i]}.location_idx(),
+            tt_.event_time({t, d}, i, ev_type)};
+  };
+
+  auto const get_fp = [&](location_idx_t const from, location_idx_t const to) {
+    if (from == to) {
+      return footpath{to, tt_.locations_.transfer_time_[from]};
+    }
+    auto const from_fps =
+        tt_.locations_.footpaths_out_[state_.tbd_.prf_idx_][from];
+    auto const it = utl::find_if(
+        from_fps, [&](footpath const& fp) { return fp.target() == to; });
+    utl::verify(it != end(from_fps),
+                "as  reconstruct: footpath from {} to {} not found",
+                location{tt_, from}, location{tt_, to});
+    return *it;
+  };
+
+  // ==================
+  // (1) Last leg
+  // ------------------
+  auto dest_segment = segment_idx_t::invalid();
+
+  // TODO: think about intermodal match mode
+  for (auto arr_candidate_segment = state_.end_reachable_.next_set_bit(0);
+       arr_candidate_segment != std::nullopt;
+       arr_candidate_segment = state_.end_reachable_.next_set_bit(
+           static_cast<uint32_t>(arr_candidate_segment.value()) + 1)) {
+    as_debug("dest candidate {}", arr_candidate_segment.value());
+
+    if (!state_.settled_segments_.test(arr_candidate_segment.value())) {
+      as_debug("no dest candidate {} => has not been settled",
+               arr_candidate_segment.value());
+      continue;
+    }
+
+    auto const [_, dep_l, arr_l, arr_time] =
+        get_transport_info(arr_candidate_segment.value(), event_type::kArr);
+
+    auto const handle_fp = [&](footpath const& fp) {
+      if (arr_time + fp.duration() != j.arrival_time()) {
+        as_debug(
+            "no dest candidate {} arr_l={}: arr_time={} + fp.duration={} = "
+            "{} != j.arrival_time={}",
+            arr_candidate_segment.value(), arr_l, arr_time, fp.duration(),
+            location{tt_, arr_l}, arr_time, fp.duration(),
+            arr_time + fp.duration(), j.arrival_time());
+        return false;
+      }
+      as_debug("FOUND!");
+      // add journey destination
+      j.dest_ = fp.target();
+      j.legs_.emplace_back(journey::leg{direction::kForward, arr_l, fp.target(),
+                                        arr_time, j.arrival_time(), fp});
+      return true;
+    };
+
+    if (handle_fp(footpath{arr_l, duration_t{0}})) {
+      dest_segment = segment_idx_t{arr_candidate_segment.value()};
+      break;
+    }
+
+    for (auto const fp :
+         tt_.locations_.footpaths_out_[state_.tbd_.prf_idx_][arr_l]) {
+      if (handle_fp(fp)) {
+        dest_segment = segment_idx_t{arr_candidate_segment.value()};
+        break;
+      }
+    }
+    if (dest_segment != segment_idx_t::invalid()) {
+      break;
+    }
   }
 
-  // TODO: first leg
+  assert(dest_segment != segment_idx_t::invalid() &&
+         "no dest segment found in reconstruct");
+
+  // ==================
+  // (2) Transport legs
+  // ------------------
+  auto current = dest_segment;
+  auto [transport, arr_stop_idx, arr_l, arr_time] =
+      get_transport_info(dest_segment, event_type::kArr);
+  while (true) {
+    auto const pred = state_.pred_table_.at(current);
+    // check whether current is the last segment of current leg
+    if (pred != state_.startSegmentPredecessor &&
+        transport.t_idx_ == state_.tbd_.segment_transports_[pred]) {
+      current = pred;
+      continue;
+    }
+    // create leg for fp between transfer unless its the first leg added
+    if (j.legs_.size() != 1) {
+      auto const fp = get_fp(arr_l, j.legs_.back().from_);
+      j.legs_.emplace_back(journey::leg{direction::kForward, arr_l,
+                                        j.legs_.back().from_, arr_time,
+                                        arr_time + fp.duration(), fp});
+    }
+    // create new leg for transport
+    auto const [_, dep_stop_idx, dep_l, dep_time] =
+        get_transport_info(current, event_type::kDep);
+    j.legs_.emplace_back(journey::leg{
+        direction::kForward, dep_l, arr_l, dep_time, arr_time,
+        journey::run_enter_exit{
+            rt::run{
+                .t_ = transport,
+                .stop_range_ = {static_cast<stop_idx_t>(0U),
+                                static_cast<stop_idx_t>(
+                                    tt_.route_location_seq_
+                                        [tt_.transport_route_[transport.t_idx_]]
+                                            .size())}},
+            dep_stop_idx, arr_stop_idx}});
+    if (pred == state_.startSegmentPredecessor) {
+      break;
+    }
+    // Update arrival variables
+    current = pred;
+    std::tie(transport, arr_stop_idx, arr_l, arr_time) =
+        get_transport_info(current, event_type::kArr);
+  }
+
+  // ==================
+  // (3) First leg
+  // ------------------
+  assert(!j.legs_.empty());
+  auto const start_time = j.start_time_;
+  auto const first_dep_l = j.legs_.back().from_;
+  auto const first_dep_time = j.legs_.back().dep_time_;
+  // TODO: add intermodal
+  for (auto const fp :
+       tt_.locations_.footpaths_in_[state_.tbd_.prf_idx_][first_dep_l]) {
+    // TODO: check why they used the has_offset here as well in query_engine
+    if (start_time + fp.duration() <= first_dep_time) {
+      j.legs_.push_back({direction::kForward, fp.target(), first_dep_l,
+                         first_dep_time - fp.duration(), first_dep_time, fp});
+      break;
+    }
+  }
 }
 
 }  // namespace routing

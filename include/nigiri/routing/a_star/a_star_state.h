@@ -5,6 +5,9 @@
 #include "nigiri/routing/tb/tb_data.h"
 #include "nigiri/types.h"
 
+#define as_debug fmt::println
+// #define as_debug(...)
+
 namespace nigiri::routing {
 
 using tb_data = tb::tb_data;
@@ -38,6 +41,7 @@ struct a_star_state {
   a_star_state(tb_data const& tbd)
       : tbd_{tbd}, pq_{maxASTravelTime.count(), get_bucket_a_star(*this)} {
     end_reachable_.resize(tbd.segment_transfers_.size());
+    settled_segments_.resize(tbd.segment_transfers_.size());
   }
 
   bool better_arrival(queue_entry qe, delta const new_arr) {
@@ -45,9 +49,12 @@ struct a_star_state {
            cost_function(qe, new_arr) > cost_function(qe);
   }
 
+  // TODO: fix to return correct time using the right offset
   unixtime_t get_dest_time(segment_idx_t s) {
     auto const arr_day = arrival_day_.find(s);
     auto const arr_time = arrival_time_.find(s);
+    return unixtime_t{to_idx(arr_day->second) * 1_days +
+                      duration_t{arr_time->second.count()}};
   }
 
   // Standard cost function used in pq
@@ -55,10 +62,11 @@ struct a_star_state {
     // * Debug asserts
     assert(arrival_day_.contains(qe.segment_));
     assert(arrival_time_.contains(qe.segment_));
-
-    return cost_function(to_idx(arrival_day_.find(qe.segment_)->second),
-                         arrival_time_.find(qe.segment_)->second.count(),
-                         qe.transfers_);
+    auto const val = cost_function(
+        to_idx(arrival_day_.find(qe.segment_)->second),
+        arrival_time_.find(qe.segment_)->second.count(), qe.transfers_);
+    as_debug("Cost function for segment {}: {}", qe.segment_, val);
+    return val;
   }
 
   // Cost function used when a new arrival time is computed
