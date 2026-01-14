@@ -21,9 +21,7 @@ using arrival_time_map =
              minutes_after_midnight_t>;  // segment -> arrival_time mapping
 using day_index_map =
     hash_map<segment_idx_t, day_idx_t>;  // segment -> arrival_day
-using pred_table =
-    hash_map<segment_idx_t, segment_idx_t>;  // pred_table initialized with
-                                             // nullopt for everything
+using pred_table = hash_map<segment_idx_t, segment_idx_t>;  // pred_table
 
 struct queue_entry {
   queue_entry(segment_idx_t const s, std::uint8_t t)

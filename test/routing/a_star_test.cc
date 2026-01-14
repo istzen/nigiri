@@ -136,6 +136,44 @@ R0_MON,14:00:00,14:00:00,S2,3,0,0
 )");
 }
 
+mem_dir edge_case_two_dest_segments_reached() {
+  return mem_dir::read(R"(
+# agency.txt
+agency_id,agency_name,agency_url,agency_timezone
+DTA,Demo Transit Authority,,Europe/London
+
+# stops.txt
+stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
+S0,S0,,,,,,
+S1,S1,,,,,,
+S2,S2,,,,,,
+S3,S3,,,,,,
+
+# calendar.txt
+service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+MON,1,0,0,0,0,0,0,20210301,20210307
+
+# routes.txt
+route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
+R0,DTA,R3,R3,"S0 -> S3 -> S1 -> S2",2
+
+# trips.txt
+route_id,service_id,trip_id,trip_headsign,block_id
+R0,MON,R0_MON,R0_MON,1
+
+# stop_times.txt
+trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+R0_MON,04:30:00,04:30:00,S0,0,0,0
+R0_MON,04:35:00,04:35:00,S3,1,0,0
+R0_MON,04:40:00,04:40:00,S1,2,0,0
+R0_MON,04:45:00,04:45:00,S2,3,0,0
+
+# transfers.txt
+from_stop_id,to_stop_id,transfer_type,min_transfer_time
+S3,S2,2,900
+)");
+}
+
 TEST(a_star, add_start) {
   auto const tt = load_gtfs(same_day_transfer_files_as);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
@@ -306,11 +344,11 @@ TEST(a_star, reconstruct_multiple_segment_runs) {
   EXPECT_EQ(j.legs_.size(), 2U);
 }
 
-TEST(a_star, execute) {
-  auto const tt = load_gtfs(same_day_transfer_files_as);
+void run_execute_test(auto const& files) {
+  auto const tt = load_gtfs(files);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  auto start_time =
-      unixtime_t{sys_days{February / 28 / 2021} + std::chrono::hours{23}};
+  tbd.print(std::cout, tt);
+  auto start_time = unixtime_t{sys_days{March / 01 / 2021}};
   auto algo_state = a_star_state{tbd};
   a_star algo = a_star_algo(tt, algo_state, "S0", "S2", start_time);
   auto size = tt.locations_.location_id_to_idx_.size();
@@ -335,7 +373,8 @@ TEST(a_star, execute) {
             tt.event_time({t, d}, i, ev_type)};
   };
   fmt::println("Segment info:");
-  for (auto s = segment_idx_t{0}; s < segment_idx_t{3};
+  for (auto s = segment_idx_t{0};
+       s < segment_idx_t{tbd.segment_transports_.size()};
        s = segment_idx_t{s + 1}) {
     auto [transport_dep, stop_idx_dep, loc_idx_dep, time_dep] =
         get_transport_info(s, event_type::kDep);
@@ -352,4 +391,10 @@ TEST(a_star, execute) {
     EXPECT_EQ(j.arrival_time(), j.legs_.back().arr_time_);
   }
   EXPECT_EQ(results.size(), 1U);
+}
+
+TEST(a_star, execute_1) { run_execute_test(same_day_transfer_files_as); }
+TEST(a_star, execute_2) { run_execute_test(multiple_segment_run_files); }
+TEST(a_star, execute_3) {
+  run_execute_test(edge_case_two_dest_segments_reached);
 }

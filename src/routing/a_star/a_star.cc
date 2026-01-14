@@ -100,9 +100,13 @@ void a_star::execute(unixtime_t const start_time,
       delta(to_idx(tt_.day_idx_mam(worst_time_at_dest).first),
             tt_.day_idx_mam(worst_time_at_dest).second.count());
   // TODO: Think about start time in cost_function for now just 0,0
-
+  uint16_t current_best_arrival = std::numeric_limits<uint16_t>::max();
   while (!state_.pq_.empty()) {
     auto const& current = state_.pq_.top();
+    // Terminate if the lowest bucket is worse than the current best arrival
+    if (state_.cost_function(current) > current_best_arrival) {
+      return;
+    }
     state_.pq_.pop();
     auto const& segment = current.segment_;
     // Check if segment is already settled in case of multiple entries in pq
@@ -115,34 +119,51 @@ void a_star::execute(unixtime_t const start_time,
              current.transfers_);
 
     // Check if current segment reaches destination
-    // TODO: this does not work always as there could be footpaths needed that
-    // take longer.
+    // TODO: cleanup horrible code
     if (state_.end_reachable_.test(segment)) [[unlikely]] {
-      as_debug("Reached destination via segment {}", segment);
+      // check if the reached segment has a better arrival_time than the
+      // currently best one
+      auto bucket = state_.cost_function(current);
+      auto const it = state_.dist_to_dest_.find(segment);
+      if (it != end(state_.dist_to_dest_)) {
+        bucket += static_cast<uint16_t>(it->second.count());
+      }
+      if (bucket >= current_best_arrival) {
+        continue;
+      }
+      current_best_arrival = bucket;
       auto const d = base_ + state_.arrival_day_[segment];
       auto const t = state_.tbd_.segment_transports_[segment];
       auto const i = static_cast<stop_idx_t>(
           to_idx(segment - state_.tbd_.transport_first_segment_[t] + (1)));
+      auto dest_time = tt_.event_time({t, d}, i, event_type::kArr);
+      // Add dist_to_dest if needed
+      if (it != end(state_.dist_to_dest_)) {
+        dest_time += it->second;
+      }
+      as_debug("Reached destination via segment {} at time: {}", segment,
+               dest_time);
+      // remove any journey that was there before and add new one
+      results.clear();
       results.add(
           {.legs_{},
            .start_time_ = start_time,
-           .dest_time_ = tt_.event_time({t, d}, i, event_type::kArr),
+           .dest_time_ = dest_time,
            .dest_ = location_idx_t::invalid(),
            .transfers_ = static_cast<std::uint8_t>(current.transfers_)});
-      return;
     }
     // Handle next segment for transport if exists
     auto const transport_current = state_.tbd_.segment_transports_[segment];
     auto const rel_segment =
         segment - state_.tbd_.transport_first_segment_[transport_current];
-    if (rel_segment < state_.tbd_.get_segment_range(transport_current).size()) {
+    auto const segment_range = state_.tbd_.get_segment_range(transport_current);
+    auto const semgent_size = segment_range.size();
+    // Note: -1 needed since that means it's the last segment and has no next
+    if (rel_segment < semgent_size - 1) {
       auto const next_segment = segment + 1;
       auto const to = static_cast<stop_idx_t>(to_idx(rel_segment) + 2);
       auto const next_stop_arr =
           tt_.event_mam(transport_current, to, event_type::kArr);
-      // TODO: How to handle costs of dist_to_dest for dest segments?
-      // * props gets unnecessary for second part as we have the heuristic in
-      // * cost function
       if (worst_delta < next_stop_arr) {
         state_.update_segment(next_segment, next_stop_arr, segment,
                               static_cast<uint8_t>(current.transfers_));
@@ -174,15 +195,15 @@ void a_star::execute(unixtime_t const start_time,
                  state_.tbd_.transport_first_segment_[transport_new] + 1));
       auto const new_arrival_time =
           tt_.event_mam(transport_new, to, event_type::kArr);
-      // TODO: How to handle costs of dist_to_dest for dest segments?
-      // * props gets unnecessary for second part as we have the heuristic in
-      // * cost function
       if (worst_delta < new_arrival_time) {
         state_.update_segment(new_segment, new_arrival_time, segment,
                               static_cast<uint8_t>(current.transfers_ + 1));
       }
     }
   }
+  // Throw error if there was no journey found
+  // TODO: check expected behavior in this case
+  assert(!results.empty() && "No journey found!");
 }
 
 void a_star::add_start(location_idx_t l, unixtime_t t) {
