@@ -40,6 +40,7 @@ struct a_star_state {
       : tbd_{tbd}, pq_{maxASTravelTime.count(), get_bucket_a_star(*this)} {
     end_reachable_.resize(tbd.segment_transfers_.size());
     settled_segments_.resize(tbd.segment_transfers_.size());
+    start_segments_.resize(tbd.segment_transfers_.size());
   }
 
   bool better_arrival(queue_entry qe, delta const new_arr) {
@@ -80,18 +81,28 @@ struct a_star_state {
     }
   };
 
-  void setup(std::pair<day_idx_t, minutes_after_midnight_t> const start_delta) {
-    // only allow changes if algorithm not yet started
-    assert(arrival_day_.empty());
-    assert(arrival_time_.empty());
-
-    start_time_ = start_delta.second.count();
-    start_day_ = to_idx(start_delta.first);
+  void setup(day_idx_t const start_day,
+             minutes_after_midnight_t const start_time) {
+    assert(start_time_ == std::numeric_limits<uint16_t>::max() &&
+           start_day_ == std::numeric_limits<uint16_t>::max() &&
+           "state has not been proberly reset before setup");
+    start_time_ = start_time.count();
+    start_day_ = to_idx(start_day);
+    start_segments_.for_each_set_bit([&](segment_idx_t const s) {
+      pq_.push(queue_entry{s, 0});
+      pred_table_.emplace(s, startSegmentPredecessor);
+    });
   }
 
   void reset() {
     pred_table_.clear();
     pq_.clear();
+    settled_segments_.zero_out();
+    // TODO: think about whether these two clears are necessary
+    // arrival_time_.clear();
+    // arrival_day_.clear();
+    start_time_ = std::numeric_limits<uint16_t>::max();
+    start_day_ = std::numeric_limits<uint16_t>::max();
   }
 
   struct get_bucket_a_star {
@@ -120,12 +131,16 @@ struct a_star_state {
       end_reachable_;  // segments from which the destination is reachable
   bitvec_map<segment_idx_t>
       settled_segments_;  // segments whose shortest path is finalized
-
+  bitvec_map<segment_idx_t>
+      start_segments_;  // segments that are start segments
   float transfer_factor_;  // default value
 
 private:
-  uint16_t start_day_ = 0;  // day_idx_t of start_time
-  uint16_t start_time_ = 0;  // minutes_after_midnight_t of start_time
+  uint16_t start_day_ =
+      std::numeric_limits<uint16_t>::max();  // day_idx_t of start_time
+  uint16_t start_time_ =
+      std::numeric_limits<uint16_t>::max();  // minutes_after_midnight_t
+                                             // of start_time
 
   // Refactored part of cost function
   uint16_t cost_function(uint16_t const days,

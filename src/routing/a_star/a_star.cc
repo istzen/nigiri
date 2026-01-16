@@ -38,10 +38,8 @@ a_star::a_star(timetable const& tt,
       is_dest_{is_dest},
       dist_to_dest_{dist_to_dest},
       lb_{lb},
-      base_{base} {  // TODO: in query engine this is QUERY_DAY_SHIFT check why
+      base_{base - 5} {  // TODO: where does this come from?
   // TODO: initialize other stuff
-  // TODO: this needs to be checked
-  state_.setup({base - 5, minutes_after_midnight_t{0}});
   state_.transfer_factor_ = tts.factor_;
   // Get segments leading to dest from location_idx_t l
   // * Used from query_engine
@@ -96,10 +94,12 @@ void a_star::execute(unixtime_t const start_time,
                      unixtime_t const worst_time_at_dest,
                      profile_idx_t const,
                      pareto_set<journey>& results) {
+  // Setup state and other stuff
+  auto const [day, time] = tt_.day_idx_mam(start_time);
+  state_.setup(day - base_, time);
   delta const worst_delta =
-      delta(to_idx(tt_.day_idx_mam(worst_time_at_dest).first),
+      delta(to_idx(tt_.day_idx_mam(worst_time_at_dest).first) - base_.v_,
             tt_.day_idx_mam(worst_time_at_dest).second.count());
-  // TODO: Think about start time in cost_function for now just 0,0
   uint16_t current_best_arrival = std::numeric_limits<uint16_t>::max();
   while (!state_.pq_.empty()) {
     auto const& current = state_.pq_.top();
@@ -136,7 +136,7 @@ void a_star::execute(unixtime_t const start_time,
       auto const t = state_.tbd_.segment_transports_[segment];
       auto const i = static_cast<stop_idx_t>(
           to_idx(segment - state_.tbd_.transport_first_segment_[t] + (1)));
-      auto dest_time = tt_.event_time({t, d}, i, event_type::kArr);
+      auto dest_time = tt_.event_time({t, d}, i, event_type::kArr) + 5_days;
       // Add dist_to_dest if needed
       if (it != end(state_.dist_to_dest_)) {
         dest_time += it->second;
@@ -232,27 +232,18 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
 
       auto const start_segment =
           state_.tbd_.transport_first_segment_[et.t_idx_] + i;
-      // Update Arrival Time and Day
+      // TODO: better with saving the time or just saving the segment and
+      // calculating the time again?
+      // Add to start_segments_ with arrival time at the segment
       // * important to use i + 1 as we want the arrival at the second stop of
-      // * the segment
-      auto const delta = tt_.event_mam(r, et.t_idx_, i + 1, event_type::kArr);
-      state_.update_segment(start_segment, delta,
-                            state_.startSegmentPredecessor, 0U);
-      as_debug(
-          "Adding start segment {} for location {} with arrival time {} (day "
-          "offset {})",
-          start_segment, location{tt_, l}, t + delta.as_duration(),
-          query_day_offset);
-      // TODO: this could be reactivated for performance reasons
-      // state_.arrival_day_.emplace(start_segment, day_idx_t{delta.days()});
-      // state_.arrival_time_.emplace(start_segment,
-      //                              minutes_after_midnight_t{delta.mam()});
-      // // Update Predecessor Table
-      // state_.pred_table_.emplace(start_segment,
-      // state_.startSegmentPredecessor);
-
-      // // Enqueue Element
-      // state_.pq_.push(queue_entry{start_segment, 0U});
+      // * the segment and substract the base as start time is relative to base
+      auto arr_time = tt_.event_mam(r, et.t_idx_, i + 1, event_type::kArr);
+      arr_time = arr_time - delta{base_.v_, 0};
+      state_.arrival_day_.emplace(start_segment, arr_time.days());
+      state_.arrival_time_.emplace(start_segment, arr_time.mam());
+      state_.start_segments_.set(start_segment);
+      as_debug("Adding start segment {} for location {}", start_segment,
+               location{tt_, l});
     }
   }
 }
@@ -265,7 +256,7 @@ void a_star::reconstruct(query const& q, journey& j) const {
   auto const get_transport_info = [&](segment_idx_t const s,
                                       event_type const ev_type)
       -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
-    auto const d = base_ + state_.arrival_day_[s];
+    auto const d = base_ + state_.arrival_day_[s] + 5;
     auto const t = state_.tbd_.segment_transports_[s];
     auto const i = static_cast<stop_idx_t>(
         to_idx(s - state_.tbd_.transport_first_segment_[t] +

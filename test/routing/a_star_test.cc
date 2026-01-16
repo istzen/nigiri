@@ -177,28 +177,6 @@ S3,S2,2,900
 TEST(a_star, add_start) {
   auto const tt = load_gtfs(same_day_transfer_files_as);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  // for (auto it = tt.route_location_seq_.begin();
-  //      it != tt.route_location_seq_.end(); ++it) {
-  //   std::cout << "Route stops:\n";
-  //   for (auto const& tr : it) {
-  //     std::cout << " Stop: " << location{tt, stop{tr}.location_idx()} <<
-  //     "\n";
-  //   }
-  // }
-  // for (auto it = tbd.transport_first_segment_.begin();
-  //      it != tbd.transport_first_segment_.end(); ++it) {
-  //   std::cout << "Segment for transport "
-  //             << it->v_
-  //             // << " first segment: " << tbd.transport_first_segment_[it].v_
-  //             << "\n";
-  // }
-  // for (auto it = tbd.segment_transports_.begin();
-  //      it != tbd.segment_transports_.end(); ++it) {
-  //   std::cout << "Segment range " << tbd.get_segment_range(*it).begin().t_
-  //             << " - " << tbd.get_segment_range(*it).end().t_ << "\n";
-  //   std::cout << "Route for segment: " << tt.transport_route_[*it].v_ <<
-  //   "\n";
-  // }
   for (auto it = tbd.segment_transfers_.begin();
        it != tbd.segment_transfers_.end(); ++it) {
     std::cout << "Segment transfers for segment:\n";
@@ -220,43 +198,14 @@ TEST(a_star, add_start) {
   auto const location_idx =
       tt.locations_.location_id_to_idx_.at({"S0", source_idx_t{0}});
   algo.add_start(location_idx, start_time);
-  auto pq = algo.get_state().pq_;
-  EXPECT_EQ(pq.size(), 3U);
-  auto const& qe = pq.top();
-  pq.pop();
-  auto const& qe2 = pq.top();
-  pq.pop();
-  auto const& qe3 = pq.top();
-
-  EXPECT_EQ(qe.segment_, segment_idx_t{0});
-  EXPECT_EQ(qe2.segment_, segment_idx_t{5});
-  EXPECT_EQ(qe3.segment_, segment_idx_t{3});
-  EXPECT_EQ(qe.transfers_, 0U);
-  EXPECT_EQ(qe2.transfers_, 0U);
-  EXPECT_EQ(qe3.transfers_, 0U);
-  EXPECT_EQ(algo.get_state().pred_table_.at(qe.segment_),
-            a_star_state::startSegmentPredecessor);
-  EXPECT_EQ(algo.get_state().pred_table_.at(qe2.segment_),
-            a_star_state::startSegmentPredecessor);
-  EXPECT_EQ(algo.get_state().pred_table_.at(qe3.segment_),
-            a_star_state::startSegmentPredecessor);
+  EXPECT_TRUE(algo_state.start_segments_.test(segment_idx_t{0}));
+  EXPECT_TRUE(algo_state.start_segments_.test(segment_idx_t{5}));
+  EXPECT_TRUE(algo_state.start_segments_.test(segment_idx_t{3}));
 }
 
 TEST(a_star, reconstruct_only_one_segment_runs) {
   auto const tt = load_gtfs(same_day_transfer_files_as);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  // for (auto it = tbd.segment_transfers_.begin();
-  //      it != tbd.segment_transfers_.end(); ++it) {
-  //   std::cout << "Segment transfers for segment:\n";
-  //   for (auto const& tr : it) {
-  //     std::cout << "  to segment " << tr.to_segment_.v_ << "\n";
-  //     std::cout << "    transport offset " << tr.transport_offset_ << "\n";
-  //     std::cout << "    to segment offset " << tr.to_segment_offset_ << "\n";
-  //     std::cout << "    route " << tr.route_.v_ << "\n";
-  //   }
-  // }
-  // tbd.print(std::cout, tt);
-  // std::cout << tt;
   auto start_time =
       unixtime_t{sys_days{February / 28 / 2021} + std::chrono::hours{23}};
   auto algo_state = a_star_state{tbd};
@@ -308,18 +257,6 @@ TEST(a_star, reconstruct_only_one_segment_runs) {
 TEST(a_star, reconstruct_multiple_segment_runs) {
   auto const tt = load_gtfs(multiple_segment_run_files);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  // for (auto it = tbd.segment_transfers_.begin();
-  //      it != tbd.segment_transfers_.end(); ++it) {
-  //   std::cout << "Segment transfers for segment:\n";
-  //   for (auto const& tr : it) {
-  //     std::cout << "  to segment " << tr.to_segment_.v_ << "\n";
-  //     std::cout << "    transport offset " << tr.transport_offset_ << "\n";
-  //     std::cout << "    to segment offset " << tr.to_segment_offset_ <<
-  //     "\n"; std::cout << "    route " << tr.route_.v_ << "\n";
-  //   }
-  // }
-  // tbd.print(std::cout, tt);
-  // std::cout << tt;
   auto start_time =
       unixtime_t{sys_days{February / 28 / 2021} + std::chrono::hours{23}};
   auto algo_state = a_star_state{tbd};
@@ -357,7 +294,8 @@ void run_execute_test(auto const& files) {
       tt.locations_.location_id_to_idx_.at({"S0", source_idx_t{0}});
   algo.add_start(location_idx, start_time);
   pareto_set<journey> results;
-  algo.execute(start_time, 2U, unixtime_t::max(), profile_idx_t{0}, results);
+  algo.execute(start_time + 2_hours, 2U, unixtime_t::max(), profile_idx_t{0},
+               results);
   auto const get_transport_info = [&](segment_idx_t const s,
                                       event_type const ev_type)
       -> std::tuple<transport, stop_idx_t, location, unixtime_t> {

@@ -58,22 +58,15 @@ struct a_star {
       bool,  // require_cars_allowed
       bool,  // is wheelchair profile
       transfer_time_settings);  // contains tranfer time factor in factor_ and
-                                // min_transfer_time_ // TODO: check if other
-                                // attributes are needed
+                                // min_transfer_time_
+                                // TODO: check if other attributes are needed
 
   algo_stats_t get_stats() const { return stats_; };
 
   algo_state_t& get_state() { return state_; };
 
-  // TODO: what exactly should this do?
-  void reset_arrivals() {
-    state_.settled_segments_.reset();
-    state_.settled_segments_.resize(state_.tbd_.segment_transfers_.size());
-    state_.arrival_day_.clear();
-    state_.arrival_time_.clear();
-  };
+  void reset_arrivals() { state_.reset(); };
 
-  // TODO: what exactly should this do?
   void next_start_time() { state_.reset(); };
 
   void add_start(location_idx_t, unixtime_t);
