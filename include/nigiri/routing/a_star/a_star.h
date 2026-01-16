@@ -6,6 +6,7 @@
 #include "nigiri/routing/journey.h"
 #include "nigiri/routing/pareto_set.h"
 #include "nigiri/routing/tb/tb_data.h"
+#include "nigiri/timetable.h"
 #include "nigiri/types.h"
 
 namespace nigiri {
@@ -78,6 +79,13 @@ struct a_star {
                pareto_set<journey>& results);
 
   void reconstruct(query const& q, journey& j) const;
+
+  delta event_day_idx_mam(transport t,
+                          stop_idx_t const s_idx,
+                          event_type const et) {
+    auto const arr_time = tt_.event_mam(t.t_idx_, s_idx, et);
+    return delta{to_idx(t.day_ - base_ - 5), arr_time.mam_};
+  };
 
 private:
   timetable const& tt_;

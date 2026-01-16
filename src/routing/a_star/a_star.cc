@@ -237,9 +237,15 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
       // Add to start_segments_ with arrival time at the segment
       // * important to use i + 1 as we want the arrival at the second stop of
       // * the segment and substract the base as start time is relative to base
-      auto arr_time = tt_.event_mam(r, et.t_idx_, i + 1, event_type::kArr);
-      arr_time = arr_time - delta{base_.v_, 0};
-      state_.arrival_day_.emplace(start_segment, arr_time.days());
+      auto arr_time = event_day_idx_mam(et, static_cast<stop_idx_t>(i + 1),
+                                        event_type::kArr);
+      as_debug("Arrival_day size: {}, arrival time: size: {}",
+               state_.arrival_day_.size(), state_.arrival_time_.size());
+      auto [_, inserted] =
+          state_.arrival_day_.emplace(start_segment, arr_time.days());
+      // TODO: debug print
+      assert(inserted &&
+             "add_start: start segment already in arrival_day_ map");
       state_.arrival_time_.emplace(start_segment, arr_time.mam());
       state_.start_segments_.set(start_segment);
       as_debug("Adding start segment {} for location {}", start_segment,
