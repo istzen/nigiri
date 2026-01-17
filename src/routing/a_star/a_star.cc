@@ -6,6 +6,7 @@
 #include "utl/raii.h"
 
 #include "nigiri/common/dial.h"
+#include "nigiri/for_each_meta.h"
 #include "nigiri/routing/get_earliest_transport.h"
 #include "nigiri/routing/journey.h"
 #include "nigiri/routing/tb/tb_data.h"
@@ -38,7 +39,7 @@ a_star::a_star(timetable const& tt,
       is_dest_{is_dest},
       dist_to_dest_{dist_to_dest},
       lb_{lb},
-      base_{base - 5} {  // TODO: where does this come from?
+      base_{base} {  // TODO: where does this come from? (-5)
   // TODO: initialize other stuff
   state_.transfer_factor_ = tts.factor_;
   // Get segments leading to dest from location_idx_t l
@@ -95,11 +96,13 @@ void a_star::execute(unixtime_t const start_time,
                      profile_idx_t const,
                      pareto_set<journey>& results) {
   // Setup state and other stuff
-  auto const [day, time] = tt_.day_idx_mam(start_time);
-  state_.setup(day - base_, time);
+  auto const start_delta = day_idx_mam(start_time);
+  state_.setup(start_delta);
+  // Limit to either worst_time_at_dest or maxASTravelTime starting from
+  // start_time
   delta const worst_delta =
-      delta(to_idx(tt_.day_idx_mam(worst_time_at_dest).first) - base_.v_,
-            tt_.day_idx_mam(worst_time_at_dest).second.count());
+      std::min(day_idx_mam(worst_time_at_dest),
+               delta(maxASTravelTime.count() + start_delta.count()));
   uint16_t current_best_arrival = std::numeric_limits<uint16_t>::max();
   while (!state_.pq_.empty()) {
     auto const& current = state_.pq_.top();
@@ -121,7 +124,7 @@ void a_star::execute(unixtime_t const start_time,
     // Check if current segment reaches destination
     // TODO: cleanup horrible code
     if (state_.end_reachable_.test(segment)) [[unlikely]] {
-      // check if the reached segment has a better arrival_time than the
+      // check if the reached segment has a better cost_function than the
       // currently best one
       auto bucket = state_.cost_function(current);
       auto const it = state_.dist_to_dest_.find(segment);
@@ -132,11 +135,7 @@ void a_star::execute(unixtime_t const start_time,
         continue;
       }
       current_best_arrival = bucket;
-      auto const d = base_ + state_.arrival_day_[segment];
-      auto const t = state_.tbd_.segment_transports_[segment];
-      auto const i = static_cast<stop_idx_t>(
-          to_idx(segment - state_.tbd_.transport_first_segment_[t] + (1)));
-      auto dest_time = tt_.event_time({t, d}, i, event_type::kArr) + 5_days;
+      auto dest_time = segment_arrival_time(segment);
       // Add dist_to_dest if needed
       if (it != end(state_.dist_to_dest_)) {
         dest_time += it->second;
@@ -162,11 +161,17 @@ void a_star::execute(unixtime_t const start_time,
     if (rel_segment < semgent_size - 1) {
       auto const next_segment = segment + 1;
       auto const to = static_cast<stop_idx_t>(to_idx(rel_segment) + 2);
+      // TODO: this is not the correct time in the time frame of the algorithm
+      // need to find the day when the transport starts then we can add this on
+      // top and move it to our time frame to get the actual duration we want
       auto const next_stop_arr =
           tt_.event_mam(transport_current, to, event_type::kArr);
-      if (worst_delta < next_stop_arr) {
+      if (next_stop_arr.count() < worst_delta.count()) {
         state_.update_segment(next_segment, next_stop_arr, segment,
                               static_cast<uint8_t>(current.transfers_));
+      } else {
+        as_debug("Next segment {} arrival time {} exceeds worst arrival {}",
+                 next_segment, next_stop_arr, worst_delta);
       }
     }
     // Handle transfers
@@ -193,17 +198,17 @@ void a_star::execute(unixtime_t const start_time,
       auto const to = static_cast<stop_idx_t>(
           to_idx(new_segment -
                  state_.tbd_.transport_first_segment_[transport_new] + 1));
+
+      auto const new_mam = tt_.event_mam(transport_new, to, event_type::kArr);
       auto const new_arrival_time =
-          tt_.event_mam(transport_new, to, event_type::kArr);
-      if (worst_delta < new_arrival_time) {
+          delta{static_cast<uint16_t>(transfer.get_day_offset()),
+                static_cast<uint16_t>(new_mam.mam())};
+      if (new_arrival_time.count() < worst_delta.count()) {
         state_.update_segment(new_segment, new_arrival_time, segment,
                               static_cast<uint8_t>(current.transfers_ + 1));
       }
     }
   }
-  // Throw error if there was no journey found
-  // TODO: check expected behavior in this case
-  assert(!results.empty() && "No journey found!");
 }
 
 void a_star::add_start(location_idx_t l, unixtime_t t) {
@@ -226,7 +231,7 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
       }
 
       auto const query_day_offset = to_idx(et.day_) - to_idx(base_);
-      if (query_day_offset < 0 || query_day_offset >= kASMaxDayOffset) {
+      if (query_day_offset < 0 || query_day_offset > kASMaxDayOffset) {
         continue;
       }
 
@@ -239,8 +244,6 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
       // * the segment and substract the base as start time is relative to base
       auto arr_time = event_day_idx_mam(et, static_cast<stop_idx_t>(i + 1),
                                         event_type::kArr);
-      as_debug("Arrival_day size: {}, arrival time: size: {}",
-               state_.arrival_day_.size(), state_.arrival_time_.size());
       auto [_, inserted] =
           state_.arrival_day_.emplace(start_segment, arr_time.days());
       // TODO: debug print
@@ -259,15 +262,28 @@ void a_star::reconstruct(query const& q, journey& j) const {
          "Intermodal reconstruct not implemented yet");
   UTL_FINALLY([&]() { std::reverse(begin(j.legs_), end(j.legs_)); });
 
+  auto const has_offset = [&](std::vector<offset> const& offsets,
+                              location_match_mode const match_mode,
+                              location_idx_t const l) {
+    return utl::any_of(offsets, [&](offset const& o) {
+      return matches(tt_, match_mode, o.target(), l);
+    });
+  };
+
   auto const get_transport_info = [&](segment_idx_t const s,
                                       event_type const ev_type)
       -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
-    auto const d = base_ + state_.arrival_day_[s] + 5;
+    // TODO: this is not the correct day if the transport crosses midnight
+    // we need the transport_query_day_offset here
+    auto const d = base_ + state_.arrival_day_[s];
     auto const t = state_.tbd_.segment_transports_[s];
     auto const i = static_cast<stop_idx_t>(
         to_idx(s - state_.tbd_.transport_first_segment_[t] +
                (ev_type == event_type::kArr ? 1 : 0)));
     auto const loc_seq = tt_.route_location_seq_[tt_.transport_route_[t]];
+    // TODO: this should not be calculated again here use stored value for
+    // arrival
+    // TODO: think about value for departure
     return {{t, d},
             i,
             stop{loc_seq[i]}.location_idx(),
@@ -310,7 +326,8 @@ void a_star::reconstruct(query const& q, journey& j) const {
         get_transport_info(arr_candidate_segment.value(), event_type::kArr);
 
     auto const handle_fp = [&](footpath const& fp) {
-      if (arr_time + fp.duration() != j.arrival_time()) {
+      if (arr_time + fp.duration() != j.arrival_time() ||
+          !has_offset(q.destination_, q.dest_match_mode_, fp.target())) {
         as_debug(
             "no dest candidate {} arr_l={}: arr_time={} + fp.duration={} = "
             "{} != j.arrival_time={}",
@@ -401,8 +418,8 @@ void a_star::reconstruct(query const& q, journey& j) const {
   // TODO: add intermodal
   for (auto const fp :
        tt_.locations_.footpaths_in_[state_.tbd_.prf_idx_][first_dep_l]) {
-    // TODO: check why they used the has_offset here as well in query_engine
-    if (start_time + fp.duration() <= first_dep_time) {
+    if (start_time + fp.duration() <= first_dep_time &&
+        has_offset(q.start_, q.start_match_mode_, fp.target())) {
       j.legs_.push_back({direction::kForward, fp.target(), first_dep_l,
                          first_dep_time - fp.duration(), first_dep_time, fp});
       break;

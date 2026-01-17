@@ -37,6 +37,8 @@ struct a_star_state {
       segment_idx_t::invalid();
 
   a_star_state(tb_data const& tbd)
+      // TODO: thing about bucket size, since maxASTravelTime might be too small
+      // as there could be a jounrey longer than that due to transfers
       : tbd_{tbd}, pq_{maxASTravelTime.count(), get_bucket_a_star(*this)} {
     end_reachable_.resize(tbd.segment_transfers_.size());
     settled_segments_.resize(tbd.segment_transfers_.size());
@@ -81,13 +83,12 @@ struct a_star_state {
     }
   };
 
-  void setup(day_idx_t const start_day,
-             minutes_after_midnight_t const start_time) {
+  void setup(delta const start_delta) {
     assert(start_time_ == std::numeric_limits<uint16_t>::max() &&
            start_day_ == std::numeric_limits<uint16_t>::max() &&
            "state has not been proberly reset before setup");
-    start_time_ = start_time.count();
-    start_day_ = to_idx(start_day);
+    start_time_ = start_delta.mam();
+    start_day_ = start_delta.days();
     start_segments_.for_each_set_bit([&](segment_idx_t const s) {
       pq_.push(queue_entry{s, 0});
       pred_table_.emplace(s, startSegmentPredecessor);
@@ -134,20 +135,20 @@ struct a_star_state {
   bitvec_map<segment_idx_t>
       start_segments_;  // segments that are start segments
   float transfer_factor_;  // default value
-
-private:
   uint16_t start_day_ =
       std::numeric_limits<uint16_t>::max();  // day_idx_t of start_time
   uint16_t start_time_ =
       std::numeric_limits<uint16_t>::max();  // minutes_after_midnight_t
                                              // of start_time
 
+private:
   // Refactored part of cost function
   uint16_t cost_function(uint16_t const days,
                          uint16_t const mam,
                          uint8_t const transfers) const {
     auto const val = (days - start_day_) * 24 * 60 + mam - start_time_ +
                      transfer_factor_ * transfers;
+    assert(val >= 0 && "Cost function should always be positive");
     return val;
   }
 };

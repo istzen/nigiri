@@ -84,7 +84,26 @@ struct a_star {
                           stop_idx_t const s_idx,
                           event_type const et) {
     auto const arr_time = tt_.event_mam(t.t_idx_, s_idx, et);
-    return delta{to_idx(t.day_ - base_ - 5), arr_time.mam_};
+    return delta{static_cast<uint16_t>(to_idx(t.day_ - base_) + arr_time.days_),
+                 arr_time.mam_};
+  };
+
+  delta day_idx_mam(unixtime_t const ut) const {
+    auto const [d, t] = tt_.day_idx_mam(ut);
+    return day_idx_mam(d, t);
+  };
+
+  delta day_idx_mam(day_idx_t const day,
+                    minutes_after_midnight_t const mam) const {
+    return delta{to_idx(day - base_), static_cast<std::uint16_t>(mam.count())};
+  };
+
+  unixtime_t segment_arrival_time(segment_idx_t const segment) const {
+    auto const day_idx = state_.arrival_day_.find(segment);
+    auto const time_it = state_.arrival_time_.find(segment);
+    assert(day_idx != state_.arrival_day_.end());
+    assert(time_it != state_.arrival_time_.end());
+    return tt_.to_unixtime(base_ + day_idx->second, time_it->second);
   };
 
 private:
