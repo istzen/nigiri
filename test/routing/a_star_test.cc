@@ -64,8 +64,9 @@ pareto_set<routing::journey> a_star_search(timetable const& tt,
       .start_time_ = time,
       .start_ = {{tt.locations_.location_id_to_idx_.at({from, src}), 0_minutes,
                   0U}},
-      .destination_ = {
-          {tt.locations_.location_id_to_idx_.at({to, src}), 0_minutes, 0U}}};
+      .destination_ = {{tt.locations_.location_id_to_idx_.at({to, src}),
+                        0_minutes, 0U}},
+      .use_start_footpaths_ = true};
   return a_star_search(tt, tbd, std::move(q));
 }
 
@@ -398,9 +399,6 @@ TEST(a_star, reconstruct_multiple_segment_runs) {
   EXPECT_EQ(reconstruct_multiple_segment_runs_journey, result_str(j, tt));
 }
 
-// TODO: test with footpaths in the front and the back
-// TODO: test with transfers over midnight and journey over midnight
-
 // ==================
 // EXECUTE TESTS
 // ------------------
@@ -559,6 +557,71 @@ TEST(a_star, execute_same_day_transfer) {
                                      unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(execute_same_day_transfer_journey, results_str(results, tt));
+}
+
+mem_dir footpaths_before_and_after_files() {
+  return mem_dir::read(R"(
+# agency.txt
+agency_id,agency_name,agency_url,agency_timezone
+DTA,Demo Transit Authority,,Europe/London
+
+# stops.txt
+stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
+S0,S0,,,,,,
+S1,S1,,,,,,
+S2,S2,,,,,,
+S3,S3,,,,,,
+
+# calendar.txt
+service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+TUE,0,1,0,0,0,0,0,20210301,20210307
+
+# routes.txt
+route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
+R0,DTA,R3,R3,"S1 -> S3",2
+
+# trips.txt
+route_id,service_id,trip_id,trip_headsign,block_id
+R0,TUE,R0_MON,R0_MON,1
+
+# stop_times.txt
+trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+R0_MON,06:00:00,06:00:00,S1,0,0,0
+R0_MON,07:00:00,07:00:00,S3,1,0,0
+
+# transfers.txt
+from_stop_id,to_stop_id,transfer_type,min_transfer_time
+S0,S1,2,900
+S3,S2,2,600
+)");
+}
+
+constexpr auto const execute_footpaths_before_and_after_journey = R"(
+[2021-03-02 00:00, 2021-03-02 07:10]
+TRANSFERS: 0
+     FROM: (S0, S0) [2021-03-02 05:45]
+       TO: (S2, S2) [2021-03-02 07:10]
+leg 0: (S0, S0) [2021-03-02 05:45] -> (S1, S1) [2021-03-02 06:00]
+  FOOTPATH (duration=15)
+leg 1: (S1, S1) [2021-03-02 06:00] -> (S3, S3) [2021-03-02 07:00]
+   0: S1      S1..............................................                               d: 02.03 06:00 [02.03 06:00]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
+   1: S3      S3.............................................. a: 02.03 07:00 [02.03 07:00]
+leg 2: (S3, S3) [2021-03-02 07:00] -> (S2, S2) [2021-03-02 07:10]
+  FOOTPATH (duration=10)
+
+)";
+
+TEST(a_star, execute_footpaths_before_and_after) {
+  auto const tt = load_gtfs(footpaths_before_and_after_files);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_search(tt, tbd, "S0", "S2",
+                                     unixtime_t{sys_days{March / 02 / 2021}});
+  EXPECT_EQ(results.size(), 1U);
+  for (auto j : results) {
+    j.print(std::cout, tt);
+  }
+  EXPECT_EQ(execute_footpaths_before_and_after_journey,
+            results_str(results, tt));
 }
 
 mem_dir next_day_transfer_files_as() {
@@ -948,5 +1011,3 @@ TEST(a_star, midnight_cross) {
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(midnight_cross_journey, results_str(results, tt));
 }
-
-// TODO: Transfer corsses midnight test
