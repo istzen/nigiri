@@ -395,7 +395,6 @@ TEST(a_star, reconstruct_multiple_segment_runs) {
           {tt.locations_.location_id_to_idx_.at({"S2", source_idx_t{0}}),
            0_minutes, 0U}}};
   algo.reconstruct(q, j);
-  j.print(std::cout, tt);
   EXPECT_EQ(reconstruct_multiple_segment_runs_journey, result_str(j, tt));
 }
 
@@ -474,9 +473,6 @@ TEST(a_star, execute_one_run_journey) {
   auto const results = a_star_search(tt, tbd, "S0", "S2",
                                      unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
-  for (auto const& r : results) {
-    r.print(std::cout, tt);
-  }
   EXPECT_EQ(execute_journey, results_str(results, tt));
 }
 
@@ -562,9 +558,6 @@ TEST(a_star, execute_same_day_transfer) {
   auto const results = a_star_search(tt, tbd, "S0", "S2",
                                      unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
-  for (auto const& r : results) {
-    r.print(std::cout, tt);
-  }
   EXPECT_EQ(execute_same_day_transfer_journey, results_str(results, tt));
 }
 
@@ -641,45 +634,47 @@ stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_stat
 S0,S0,,,,,,
 S1,S1,,,,,,
 S2,S2,,,,,,
+S3,S3,,,,,,
 
 # calendar.txt
 service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+MON,1,0,0,0,0,0,0,20210301,20210307
 TUE,0,1,0,0,0,0,0,20210301,20210307
-WED,0,0,1,0,0,0,0,20210301,20210307
 
 # routes.txt
 route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
 R0,DTA,R0,R0,"S0 -> S1",2
-R1,DTA,R1,R1,"S1 -> S2",2
+R1,DTA,R1,R1,"S3 -> S1 -> S2",2
 
 # trips.txt
 route_id,service_id,trip_id,trip_headsign,block_id
-R0,TUE,R0_TUE,R0_TUE,1
-R1,WED,R1_WED,R1_WED,2
+R0,MON,R0_MON,R0_MON,1
+R1,TUE,R1_TUE,R1_TUE,2
 
 # stop_times.txt
 trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
-R0_TUE,12:00:00,12:00:00,S0,0,0,0
-R0_TUE,23:00:00,23:00:00,S1,1,0,0
-R1_WED,06:00:00,06:00:00,S1,0,0,0
-R1_WED,08:00:00,08:00:00,S2,1,0,0
+R0_MON,22:00:00,22:00:00,S3,0,0,0
+R0_MON,30:00:00,30:00:00,S1,1,0,0
+R0_MON,31:00:00,31:00:00,S2,2,0,0
+R1_TUE,02:00:00,02:00:00,S0,0,0,0
+R1_TUE,03:00:00,03:00:00,S1,1,0,0
 )");
 }
 
 constexpr auto const execute_transfer_to_journey_from_previous_day_journey = R"(
-[2021-03-02 11:00, 2021-03-03 08:00]
+[2021-03-02 01:00, 2021-03-02 07:00]
 TRANSFERS: 1
-     FROM: (S0, S0) [2021-03-02 12:00]
-       TO: (S2, S2) [2021-03-03 08:00]
-leg 0: (S0, S0) [2021-03-02 12:00] -> (S1, S1) [2021-03-02 23:00]
-   0: S0      S0..............................................                               d: 02.03 12:00 [02.03 12:00]  [{name=R0, day=2021-03-02, id=R0_TUE, src=0}]
-   1: S1      S1.............................................. a: 02.03 23:00 [02.03 23:00]
-leg 1: (S1, S1) [2021-03-02 23:00] -> (S1, S1) [2021-03-02 23:02]
+     FROM: (S0, S0) [2021-03-02 02:00]
+       TO: (S2, S2) [2021-03-02 07:00]
+leg 0: (S0, S0) [2021-03-02 02:00] -> (S1, S1) [2021-03-02 03:00]
+   0: S0      S0..............................................                               d: 02.03 02:00 [02.03 02:00]  [{name=R1, day=2021-03-02, id=R1_TUE, src=0}]
+   1: S1      S1.............................................. a: 02.03 03:00 [02.03 03:00]
+leg 1: (S1, S1) [2021-03-02 03:00] -> (S1, S1) [2021-03-02 03:02]
   FOOTPATH (duration=2)
-leg 2: (S1, S1) [2021-03-03 06:00] -> (S2, S2) [2021-03-03 08:00]
-   0: S1      S1..............................................                               d: 03.03 06:00 [03.03 06:00]  [{name=R1, day=2021-03-03, id=R1_WED, src=0}]
-   1: S2      S2.............................................. a: 03.03 08:00 [03.03 08:00]
-leg 3: (S2, S2) [2021-03-03 08:00] -> (S2, S2) [2021-03-03 08:00]
+leg 2: (S1, S1) [2021-03-02 06:00] -> (S2, S2) [2021-03-02 07:00]
+   1: S1      S1..............................................                               d: 02.03 06:00 [02.03 06:00]  [{name=R0, day=2021-03-01, id=R0_MON, src=0}]
+   2: S2      S2.............................................. a: 02.03 07:00 [02.03 07:00]
+leg 3: (S2, S2) [2021-03-02 07:00] -> (S2, S2) [2021-03-02 07:00]
   FOOTPATH (duration=0)
 
 )";
@@ -688,11 +683,8 @@ TEST(a_star, execute_transfer_to_journey_from_previous_day) {
   auto const tt = load_gtfs(transfer_to_journey_from_previous_day_files);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
   auto const results = a_star_search(
-      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
+      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 1_hours});
   EXPECT_EQ(results.size(), 1U);
-  for (auto const& r : results) {
-    r.print(std::cout, tt);
-  }
   EXPECT_EQ(execute_transfer_to_journey_from_previous_day_journey,
             results_str(results, tt));
 }
@@ -740,7 +732,7 @@ TRANSFERS: 1
        TO: (S2, S2) [2021-03-03 08:00]
 leg 0: (S0, S0) [2021-03-02 12:00] -> (S1, S1) [2021-03-03 01:00]
    0: S0      S0..............................................                               d: 02.03 12:00 [02.03 12:00]  [{name=R0, day=2021-03-02, id=R0_TUE, src=0}]
-   1: S1      S1.............................................. a: 03.03 02:00 [03.03 01:00]
+   1: S1      S1.............................................. a: 03.03 01:00 [03.03 01:00]
 leg 1: (S1, S1) [2021-03-03 01:00] -> (S1, S1) [2021-03-03 01:02]
   FOOTPATH (duration=2)
 leg 2: (S1, S1) [2021-03-03 06:00] -> (S2, S2) [2021-03-03 08:00]
@@ -757,10 +749,81 @@ TEST(a_star, execute_transfer_on_next_day) {
   auto const results = a_star_search(
       tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
   EXPECT_EQ(results.size(), 1U);
-  for (auto const& r : results) {
-    r.print(std::cout, tt);
-  }
   EXPECT_EQ(execute_transfer_on_next_day_journey, results_str(results, tt));
+}
+
+mem_dir transfer_on_next_day_follow_up_files_as() {
+  return mem_dir::read(R"(
+# agency.txt
+agency_id,agency_name,agency_url,agency_timezone
+DTA,Demo Transit Authority,,Europe/London
+
+# stops.txt
+stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
+S0,S0,,,,,,
+S1,S1,,,,,,
+S2,S2,,,,,,
+S3,S3,,,,,,
+
+# calendar.txt
+service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+TUE,0,1,0,0,0,0,0,20210301,20210307
+WED,0,0,1,0,0,0,0,20210301,20210307
+
+# routes.txt
+route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
+R0,DTA,R0,R0,"S0 -> S1",2
+R1,DTA,R1,R1,"S1 -> S2",2
+R2,DTA,R2,R2,"S2 -> S3",2
+
+# trips.txt
+route_id,service_id,trip_id,trip_headsign,block_id
+R0,TUE,R0_TUE,R0_TUE,1
+R1,WED,R1_WED,R1_WED,2
+R2,WED,R2_WED,R2_WED,3
+
+# stop_times.txt
+trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+R0_TUE,12:00:00,12:00:00,S0,0,0,0
+R0_TUE,25:00:00,25:00:00,S1,1,0,0
+R1_WED,06:00:00,06:00:00,S1,0,0,0
+R1_WED,08:00:00,08:00:00,S2,1,0,0
+R2_WED,08:30:00,08:30:00,S2,0,0,0
+R2_WED,09:00:00,09:00:00,S3,1,0,0
+)");
+}
+
+constexpr auto const execute_transfer_on_next_day_follow_up_journey = R"(
+[2021-03-02 11:00, 2021-03-03 09:00]
+TRANSFERS: 2
+     FROM: (S0, S0) [2021-03-02 12:00]
+       TO: (S3, S3) [2021-03-03 09:00]
+leg 0: (S0, S0) [2021-03-02 12:00] -> (S1, S1) [2021-03-03 01:00]
+   0: S0      S0..............................................                               d: 02.03 12:00 [02.03 12:00]  [{name=R0, day=2021-03-02, id=R0_TUE, src=0}]
+   1: S1      S1.............................................. a: 03.03 01:00 [03.03 01:00]
+leg 1: (S1, S1) [2021-03-03 01:00] -> (S1, S1) [2021-03-03 01:02]
+  FOOTPATH (duration=2)
+leg 2: (S1, S1) [2021-03-03 06:00] -> (S2, S2) [2021-03-03 08:00]
+   0: S1      S1..............................................                               d: 03.03 06:00 [03.03 06:00]  [{name=R1, day=2021-03-03, id=R1_WED, src=0}]
+   1: S2      S2.............................................. a: 03.03 08:00 [03.03 08:00]
+leg 3: (S2, S2) [2021-03-03 08:00] -> (S2, S2) [2021-03-03 08:02]
+  FOOTPATH (duration=2)
+leg 4: (S2, S2) [2021-03-03 08:30] -> (S3, S3) [2021-03-03 09:00]
+   0: S2      S2..............................................                               d: 03.03 08:30 [03.03 08:30]  [{name=R2, day=2021-03-03, id=R2_WED, src=0}]
+   1: S3      S3.............................................. a: 03.03 09:00 [03.03 09:00]
+leg 5: (S3, S3) [2021-03-03 09:00] -> (S3, S3) [2021-03-03 09:00]
+  FOOTPATH (duration=0)
+
+)";
+
+TEST(a_star, execute_transfer_on_next_day_follow_up) {
+  auto const tt = load_gtfs(transfer_on_next_day_follow_up_files_as);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_search(
+      tt, tbd, "S0", "S3", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
+  EXPECT_EQ(results.size(), 1U);
+  EXPECT_EQ(execute_transfer_on_next_day_follow_up_journey,
+            results_str(results, tt));
 }
 
 mem_dir two_dest_segments_reached_files() {
@@ -828,7 +891,6 @@ TEST(a_star, execute_two_dest_segments_reached) {
 
 // TODO: dest == start test
 
-// TODO: Journey crosses midnight test
 mem_dir midnight_cross_files() {
   return mem_dir::read(R"(
 # agency.txt
@@ -866,13 +928,13 @@ R0_TUE,25:00:00,25:00:00,S2,3,0,0
 constexpr auto const midnight_cross_journey = R"(
 [2021-03-02 11:00, 2021-03-03 01:00]
 TRANSFERS: 0
-     FROM: (S0, S0) [2021-03-02 23:30]
+     FROM: (S0, S0) [2021-03-02 23:00]
        TO: (S2, S2) [2021-03-03 01:00]
-leg 0: (S0, S0) [2021-03-02 23:30] -> (S2, S2) [2021-03-03 01:00]
-   0: S0      S0..............................................                               d: 03.03 23:00 [03.03 23:00]  [{name=R3, day=2021-03-03, id=R0_TUE, src=0}]
-   1: S3      S3.............................................. a: 03.03 23:30 [03.03 23:30]  d: 03.03 23:30 [03.03 23:30]  [{name=R3, day=2021-03-03, id=R0_TUE, src=0}]
-   2: S1      S1.............................................. a: 04.03 00:00 [04.03 00:00]  d: 04.03 00:00 [04.03 00:00]  [{name=R3, day=2021-03-03, id=R0_TUE, src=0}]
-   3: S2      S2.............................................. a: 04.03 01:00 [04.03 01:00]
+leg 0: (S0, S0) [2021-03-02 23:00] -> (S2, S2) [2021-03-03 01:00]
+   0: S0      S0..............................................                               d: 02.03 23:00 [02.03 23:00]  [{name=R3, day=2021-03-02, id=R0_TUE, src=0}]
+   1: S3      S3.............................................. a: 02.03 23:30 [02.03 23:30]  d: 02.03 23:30 [02.03 23:30]  [{name=R3, day=2021-03-02, id=R0_TUE, src=0}]
+   2: S1      S1.............................................. a: 03.03 00:00 [03.03 00:00]  d: 03.03 00:00 [03.03 00:00]  [{name=R3, day=2021-03-02, id=R0_TUE, src=0}]
+   3: S2      S2.............................................. a: 03.03 01:00 [03.03 01:00]
 leg 1: (S2, S2) [2021-03-03 01:00] -> (S2, S2) [2021-03-03 01:00]
   FOOTPATH (duration=0)
 
@@ -884,9 +946,6 @@ TEST(a_star, midnight_cross) {
   auto const results = a_star_search(
       tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}} + 11_hours);
   EXPECT_EQ(results.size(), 1U);
-  for (auto const& r : results) {
-    r.print(std::cout, tt);
-  }
   EXPECT_EQ(midnight_cross_journey, results_str(results, tt));
 }
 

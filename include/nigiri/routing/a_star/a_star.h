@@ -88,6 +88,17 @@ struct a_star {
                  arr_time.mam_};
   };
 
+  delta event_day_idx_mam(transport_idx_t t_idx,
+                          stop_idx_t const s_idx,
+                          event_type const et) {
+    assert(state_.transport_day_offset_.contains(t_idx) &&
+           "invalid transport call");
+    auto const arr_time = tt_.event_mam(t_idx, s_idx, et);
+    return delta{static_cast<uint16_t>(state_.transport_day_offset_.at(t_idx) +
+                                       arr_time.days_),
+                 arr_time.mam_};
+  }
+
   delta day_idx_mam(unixtime_t const ut) const {
     auto const [d, t] = tt_.day_idx_mam(ut);
     return day_idx_mam(d, t);

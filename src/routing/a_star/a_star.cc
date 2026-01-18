@@ -165,7 +165,7 @@ void a_star::execute(unixtime_t const start_time,
       // need to find the day when the transport starts then we can add this on
       // top and move it to our time frame to get the actual duration we want
       auto const next_stop_arr =
-          tt_.event_mam(transport_current, to, event_type::kArr);
+          event_day_idx_mam(transport_current, to, event_type::kArr);
       if (next_stop_arr.count() < worst_delta.count()) {
         state_.update_segment(next_segment, next_stop_arr, segment,
                               static_cast<uint8_t>(current.transfers_));
@@ -200,12 +200,18 @@ void a_star::execute(unixtime_t const start_time,
                  state_.tbd_.transport_first_segment_[transport_new] + 1));
 
       auto const new_mam = tt_.event_mam(transport_new, to, event_type::kArr);
-      auto const new_arrival_time =
-          delta{static_cast<uint16_t>(transfer.get_day_offset()),
-                static_cast<uint16_t>(new_mam.mam())};
+      auto const current_transport_offset =
+          state_.transport_day_offset_[transport_current];
+      auto const new_arrival_time = delta{
+          static_cast<uint16_t>(transfer.get_day_offset() + new_mam.days() +
+                                current_transport_offset),
+          static_cast<uint16_t>(new_mam.mam())};
       if (new_arrival_time.count() < worst_delta.count()) {
         state_.update_segment(new_segment, new_arrival_time, segment,
                               static_cast<uint8_t>(current.transfers_ + 1));
+        state_.transport_day_offset_.emplace(
+            transport_new,
+            transfer.get_day_offset() + current_transport_offset);
       }
     }
   }
@@ -253,6 +259,9 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
       state_.start_segments_.set(start_segment);
       as_debug("Adding start segment {} for location {}", start_segment,
                location{tt_, l});
+      state_.transport_day_offset_.emplace(
+          et.t_idx_,
+          static_cast<int8_t>(et.day_.v_) - static_cast<int8_t>(base_.v_));
     }
   }
 }
@@ -273,10 +282,8 @@ void a_star::reconstruct(query const& q, journey& j) const {
   auto const get_transport_info = [&](segment_idx_t const s,
                                       event_type const ev_type)
       -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
-    // TODO: this is not the correct day if the transport crosses midnight
-    // we need the transport_query_day_offset here
-    auto const d = base_ + state_.arrival_day_[s];
     auto const t = state_.tbd_.segment_transports_[s];
+    auto const d = base_ + state_.transport_day_offset_[t];
     auto const i = static_cast<stop_idx_t>(
         to_idx(s - state_.tbd_.transport_first_segment_[t] +
                (ev_type == event_type::kArr ? 1 : 0)));

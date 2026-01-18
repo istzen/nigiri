@@ -140,6 +140,9 @@ struct a_star_state {
   uint16_t start_time_ =
       std::numeric_limits<uint16_t>::max();  // minutes_after_midnight_t
                                              // of start_time
+  hash_map<transport_idx_t, int8_t>
+      transport_day_offset_;  // start_index for transport to calculate the
+                              // correct times
 
 private:
   // Refactored part of cost function
