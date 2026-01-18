@@ -13,9 +13,7 @@ namespace nigiri::routing {
 using tb_data = tb::tb_data;
 using segment_idx_t = tb::segment_idx_t;
 
-// * The next three lines are the data structures needed as per info paper
-// TODO: this should be a datetime already so the type needs to change or the
-// second line is not needed
+// TODO: think about changing the values to smaller size
 using arrival_time_map =
     hash_map<segment_idx_t,
              minutes_after_midnight_t>;  // segment -> arrival_time mapping
@@ -32,7 +30,6 @@ struct queue_entry {
 };
 
 struct a_star_state {
-  // TODO: maybe change to different value like invalid - 1
   static constexpr auto const startSegmentPredecessor =
       segment_idx_t::invalid();
 
@@ -55,9 +52,9 @@ struct a_star_state {
     // * Debug asserts
     assert(arrival_day_.contains(qe.segment_));
     assert(arrival_time_.contains(qe.segment_));
-    auto const val = cost_function(
-        to_idx(arrival_day_.find(qe.segment_)->second),
-        arrival_time_.find(qe.segment_)->second.count(), qe.transfers_);
+    auto const val =
+        cost_function(to_idx(arrival_day_.at(qe.segment_)),
+                      arrival_time_.at(qe.segment_).count(), qe.transfers_);
     as_debug("Cost function for segment {}: {}", qe.segment_, val);
     return val;
   }
@@ -71,13 +68,11 @@ struct a_star_state {
                       delta const new_arr,
                       segment_idx_t pred,
                       uint8_t transfers) {
-    // check if the arrival time is better
     if (better_arrival(queue_entry{s, transfers}, new_arr)) {
-      // Update arrival time
       arrival_day_.insert_or_assign(s, day_idx_t{new_arr.days()});
       arrival_time_.insert_or_assign(s,
                                      minutes_after_midnight_t{new_arr.mam()});
-      // Update Predecessor Table
+
       pred_table_.insert_or_assign(s, pred);
       pq_.push(queue_entry{s, transfers});
     }
@@ -99,9 +94,8 @@ struct a_star_state {
     pred_table_.clear();
     pq_.clear();
     settled_segments_.zero_out();
-    // TODO: think about whether these two clears are necessary
-    // arrival_time_.clear();
-    // arrival_day_.clear();
+    arrival_time_.clear();
+    arrival_day_.clear();
     start_time_ = std::numeric_limits<uint16_t>::max();
     start_day_ = std::numeric_limits<uint16_t>::max();
   }
@@ -111,7 +105,6 @@ struct a_star_state {
 
     get_bucket_a_star(a_star_state const& state) : state_{state} {}
 
-    // TODO: value could be saved for performance
     dist_t operator()(queue_entry const& q) const {
       return state_.cost_function(q);
     }
@@ -151,7 +144,7 @@ private:
                          uint8_t const transfers) const {
     auto const val = (days - start_day_) * 24 * 60 + mam - start_time_ +
                      transfer_factor_ * transfers;
-    assert(val >= 0 && "Cost function should always be positive");
+    assert(val >= 0 && "Cost function should always be positive or zero");
     return val;
   }
 };

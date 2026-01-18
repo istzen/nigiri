@@ -16,7 +16,6 @@ using tb_data = tb::tb_data;
 using segment_idx_t = tb::segment_idx_t;
 
 struct a_star_stats {
-  // TODO: implement and find out what is actually needed here.
   std::map<std::string, std::uint64_t> to_map() const {
     return {
         {"n_segments_enqueued", n_segments_enqueued_},
@@ -44,7 +43,7 @@ struct a_star {
       std::array<bitvec, kMaxVias> const&,  // via segments
       std::vector<std::uint16_t> const&
           dist_to_dest,  // dest segments -> distance to dest in minutes for
-                         // dest segments
+                         // dest segments in intermodal case
       hash_map<location_idx_t,
                std::vector<td_offset>> const&,  // location_idx_t -> td_offsets
                                                 // (valid_from, duration,
@@ -54,13 +53,12 @@ struct a_star {
                // check if true
       std::vector<via_stop> const&,  // via stops
       day_idx_t base,  // base day idx, presumably of start time
-      clasz_mask_t,  // allowed clasz mask // TODO: what is this and why needed?
+      clasz_mask_t,  // allowed clasz mask
       bool,  // require_bikes_allowed
       bool,  // require_cars_allowed
       bool,  // is wheelchair profile
       transfer_time_settings);  // contains tranfer time factor in factor_ and
                                 // min_transfer_time_
-                                // TODO: check if other attributes are needed
 
   algo_stats_t get_stats() const { return stats_; };
 

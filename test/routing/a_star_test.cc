@@ -70,40 +70,6 @@ pareto_set<routing::journey> a_star_search(timetable const& tt,
   return a_star_search(tt, tbd, std::move(q));
 }
 
-// void print_segment_info(timetable const& tt, a_star_state const& algo_state)
-// {
-
-//   auto const get_transport_info = [&](segment_idx_t const s,
-//                                       event_type const ev_type)
-//       -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
-//     auto const d = algo_state.arrival_day_[s];
-//     auto const t = algo_state.tbd_.segment_transports_[s];
-//     auto const i = static_cast<stop_idx_t>(
-//         to_idx(s - algo_state.tbd_.transport_first_segment_[t] +
-//                (ev_type == event_type::kArr ? 1 : 0)));
-//     auto const loc_seq = tt.route_location_seq_[tt.transport_route_[t]];
-//     return {{t, d},
-//             i,
-//             stop{loc_seq[i]}.location_idx(),
-//             tt.event_time({t, d}, i, ev_type)};
-//   };
-//   fmt::println("Segment info:");
-//   for (auto s = segment_idx_t{0}; s < segment_idx_t{6};
-//        s = segment_idx_t{s + 1}) {
-//     auto [transport_dep, stop_idx_dep, loc_idx_dep, time_dep] =
-//         get_transport_info(s, event_type::kDep);
-//     fmt::println(" Segment {}: transport {}, stop {}, location {}, time {}",
-//     s,
-//                  transport_dep.t_idx_.v_, stop_idx_dep, loc_idx_dep,
-//                  time_dep);
-//     auto [transport, stop_idx, loc_idx, time] =
-//         get_transport_info(s, event_type::kArr);
-//     fmt::println(" Segment {}: transport {}, stop {}, location {}, time {}",
-//     s,
-//                  transport.t_idx_.v_, stop_idx, loc_idx, time);
-//   }
-// }
-
 a_star a_star_algo(timetable const& tt,
                    tb::tb_data const& tbd,
                    routing::query q) {
@@ -292,7 +258,7 @@ TEST(a_star, reconstruct_only_one_segment_runs) {
   auto start_time = unixtime_t{sys_days{March / 02 / 2021}};
   auto algo_state = a_star_state{tbd};
   a_star algo = a_star_algo(tt, algo_state, "S0", "S3", start_time);
-  // setup state
+
   algo_state.setup(delta{0, 0});
   algo_state.update_segment(segment_idx_t{0}, delta{0, 0},
                             a_star_state::startSegmentPredecessor, 0U);
@@ -373,7 +339,7 @@ TEST(a_star, reconstruct_multiple_segment_runs) {
   auto start_time = unixtime_t{sys_days{March / 02 / 2021}};
   auto algo_state = a_star_state{tbd};
   a_star algo = a_star_algo(tt, algo_state, "S0", "S2", start_time);
-  // setup state
+
   algo_state.setup(delta{0, 0});
   algo_state.update_segment(segment_idx_t{0}, delta{0, 0},
                             a_star_state::startSegmentPredecessor, 0U);

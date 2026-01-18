@@ -40,7 +40,6 @@ a_star::a_star(timetable const& tt,
       dist_to_dest_{dist_to_dest},
       lb_{lb},
       base_{base} {  // TODO: where does this come from? (-5)
-  // TODO: initialize other stuff
   state_.transfer_factor_ = tts.factor_;
   // Get segments leading to dest from location_idx_t l
   // * Used from query_engine
@@ -121,8 +120,6 @@ void a_star::execute(unixtime_t const start_time,
     as_debug("Visiting segment {} with transfers {}", segment,
              current.transfers_);
 
-    // Check if current segment reaches destination
-    // TODO: cleanup horrible code
     if (state_.end_reachable_.test(segment)) [[unlikely]] {
       // check if the reached segment has a better cost_function than the
       // currently best one
@@ -136,13 +133,13 @@ void a_star::execute(unixtime_t const start_time,
       }
       current_best_arrival = bucket;
       auto dest_time = segment_arrival_time(segment);
-      // Add dist_to_dest if needed
+
       if (it != end(state_.dist_to_dest_)) {
         dest_time += it->second;
       }
       as_debug("Reached destination via segment {} at time: {}", segment,
                dest_time);
-      // remove any journey that was there before and add new one
+
       results.clear();
       results.add(
           {.legs_{},
@@ -151,7 +148,7 @@ void a_star::execute(unixtime_t const start_time,
            .dest_ = location_idx_t::invalid(),
            .transfers_ = static_cast<std::uint8_t>(current.transfers_)});
     }
-    // Handle next segment for transport if exists
+    // Handle next segment of transport if exists
     auto const transport_current = state_.tbd_.segment_transports_[segment];
     auto const rel_segment =
         segment - state_.tbd_.transport_first_segment_[transport_current];
@@ -161,9 +158,6 @@ void a_star::execute(unixtime_t const start_time,
     if (rel_segment < semgent_size - 1) {
       auto const next_segment = segment + 1;
       auto const to = static_cast<stop_idx_t>(to_idx(rel_segment) + 2);
-      // TODO: this is not the correct time in the time frame of the algorithm
-      // need to find the day when the transport starts then we can add this on
-      // top and move it to our time frame to get the actual duration we want
       auto const next_stop_arr =
           event_day_idx_mam(transport_current, to, event_type::kArr);
       if (next_stop_arr.count() < worst_delta.count()) {
@@ -221,7 +215,6 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
   // * Used from query_engine
   auto const [day, mam] = tt_.day_idx_mam(t);
   for (auto const r : tt_.location_routes_[l]) {
-    // iterate stop sequence of route, skip last stop
     auto const stop_seq = tt_.route_location_seq_[r];
     for (auto i = stop_idx_t{0U}; i < stop_seq.size() - 1; ++i) {
       auto const stp = stop{stop_seq[i]};
@@ -243,11 +236,6 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
 
       auto const start_segment =
           state_.tbd_.transport_first_segment_[et.t_idx_] + i;
-      // TODO: better with saving the time or just saving the segment and
-      // calculating the time again?
-      // Add to start_segments_ with arrival time at the segment
-      // * important to use i + 1 as we want the arrival at the second stop of
-      // * the segment and substract the base as start time is relative to base
       auto arr_time = event_day_idx_mam(et, static_cast<stop_idx_t>(i + 1),
                                         event_type::kArr);
       auto [_, inserted] =
@@ -288,9 +276,6 @@ void a_star::reconstruct(query const& q, journey& j) const {
         to_idx(s - state_.tbd_.transport_first_segment_[t] +
                (ev_type == event_type::kArr ? 1 : 0)));
     auto const loc_seq = tt_.route_location_seq_[tt_.transport_route_[t]];
-    // TODO: this should not be calculated again here use stored value for
-    // arrival
-    // TODO: think about value for departure
     return {{t, d},
             i,
             stop{loc_seq[i]}.location_idx(),
@@ -316,7 +301,7 @@ void a_star::reconstruct(query const& q, journey& j) const {
   // ------------------
   auto dest_segment = segment_idx_t::invalid();
 
-  // TODO: think about intermodal match mode
+  // TODO: add intermodal
   for (auto arr_candidate_segment = state_.end_reachable_.next_set_bit(0);
        arr_candidate_segment != std::nullopt;
        arr_candidate_segment = state_.end_reachable_.next_set_bit(
@@ -344,7 +329,6 @@ void a_star::reconstruct(query const& q, journey& j) const {
         return false;
       }
       as_debug("FOUND!");
-      // add journey destination
       j.dest_ = fp.target();
       j.legs_.emplace_back(journey::leg{direction::kForward, arr_l, fp.target(),
                                         arr_time, j.arrival_time(), fp});
@@ -379,20 +363,18 @@ void a_star::reconstruct(query const& q, journey& j) const {
       get_transport_info(dest_segment, event_type::kArr);
   while (true) {
     auto const pred = state_.pred_table_.at(current);
-    // check whether current is the last segment of current leg
     if (pred != state_.startSegmentPredecessor &&
         transport.t_idx_ == state_.tbd_.segment_transports_[pred]) {
       current = pred;
       continue;
     }
-    // create leg for fp between transfer unless its the first leg added
+    // TODO: this could be implemented nicer
     if (j.legs_.size() != 1) {
       auto const fp = get_fp(arr_l, j.legs_.back().from_);
       j.legs_.emplace_back(journey::leg{direction::kForward, arr_l,
                                         j.legs_.back().from_, arr_time,
                                         arr_time + fp.duration(), fp});
     }
-    // create new leg for transport
     auto const [_, dep_stop_idx, dep_l, dep_time] =
         get_transport_info(current, event_type::kDep);
     j.legs_.emplace_back(journey::leg{
@@ -409,7 +391,7 @@ void a_star::reconstruct(query const& q, journey& j) const {
     if (pred == state_.startSegmentPredecessor) {
       break;
     }
-    // Update arrival variables
+
     current = pred;
     std::tie(transport, arr_stop_idx, arr_l, arr_time) =
         get_transport_info(current, event_type::kArr);
