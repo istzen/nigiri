@@ -94,6 +94,7 @@ struct a_star_state {
     pred_table_.clear();
     pq_.clear();
     settled_segments_.zero_out();
+    start_segments_.zero_out();
     arrival_time_.clear();
     arrival_day_.clear();
     start_time_ = std::numeric_limits<uint16_t>::max();

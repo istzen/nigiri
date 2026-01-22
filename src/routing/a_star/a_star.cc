@@ -1,5 +1,7 @@
 #include "nigiri/routing/a_star/a_star.h"
 
+#include <ranges>
+
 #include "fmt/ranges.h"
 
 #include "utl/enumerate.h"
@@ -10,6 +12,7 @@
 #include "nigiri/routing/get_earliest_transport.h"
 #include "nigiri/routing/journey.h"
 #include "nigiri/routing/tb/tb_data.h"
+#include "nigiri/special_stations.h"
 #include "nigiri/timetable.h"
 #include "nigiri/types.h"
 
@@ -241,8 +244,9 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
       auto [_, inserted] =
           state_.arrival_day_.emplace(start_segment, arr_time.days());
       // TODO: debug print
-      assert(inserted &&
-             "add_start: start segment already in arrival_day_ map");
+      assert(inserted ||
+             state_.arrival_day_.at(start_segment) == arr_time.days() &&
+                 "add_start: start segment already in arrival_day_ map");
       state_.arrival_time_.emplace(start_segment, arr_time.mam());
       state_.start_segments_.set(start_segment);
       as_debug("Adding start segment {} for location {}", start_segment,
@@ -255,8 +259,6 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
 }
 
 void a_star::reconstruct(query const& q, journey& j) const {
-  assert(q.dest_match_mode_ != location_match_mode::kIntermodal &&
-         "Intermodal reconstruct not implemented yet");
   UTL_FINALLY([&]() { std::reverse(begin(j.legs_), end(j.legs_)); });
 
   auto const has_offset = [&](std::vector<offset> const& offsets,
@@ -301,54 +303,85 @@ void a_star::reconstruct(query const& q, journey& j) const {
   // ------------------
   auto dest_segment = segment_idx_t::invalid();
 
-  // TODO: add intermodal
-  for (auto arr_candidate_segment = state_.end_reachable_.next_set_bit(0);
-       arr_candidate_segment != std::nullopt;
-       arr_candidate_segment = state_.end_reachable_.next_set_bit(
-           static_cast<uint32_t>(arr_candidate_segment.value()) + 1)) {
-    as_debug("dest candidate {}", arr_candidate_segment.value());
+  if (q.dest_match_mode_ == location_match_mode::kIntermodal) {
+    for (auto arr_candidate_segment = state_.end_reachable_.next_set_bit(0);
+         arr_candidate_segment != std::nullopt;
+         arr_candidate_segment = state_.end_reachable_.next_set_bit(
+             static_cast<uint32_t>(arr_candidate_segment.value()) + 1)) {
 
-    if (!state_.settled_segments_.test(arr_candidate_segment.value())) {
-      as_debug("no dest candidate {} => has not been settled",
-               arr_candidate_segment.value());
-      continue;
-    }
-
-    auto const [_, dep_l, arr_l, arr_time] =
-        get_transport_info(arr_candidate_segment.value(), event_type::kArr);
-
-    auto const handle_fp = [&](footpath const& fp) {
-      if (arr_time + fp.duration() != j.arrival_time() ||
-          !has_offset(q.destination_, q.dest_match_mode_, fp.target())) {
-        as_debug(
-            "no dest candidate {} arr_l={}: arr_time={} + fp.duration={} = "
-            "{} != j.arrival_time={}",
-            arr_candidate_segment.value(), arr_l, arr_time, fp.duration(),
-            location{tt_, arr_l}, arr_time, fp.duration(),
-            arr_time + fp.duration(), j.arrival_time());
-        return false;
+      if (!state_.settled_segments_.test(arr_candidate_segment.value())) {
+        continue;
       }
-      as_debug("FOUND!");
-      j.dest_ = fp.target();
-      j.legs_.emplace_back(journey::leg{direction::kForward, arr_l, fp.target(),
-                                        arr_time, j.arrival_time(), fp});
-      return true;
-    };
 
-    if (handle_fp(footpath{arr_l, duration_t{0}})) {
+      auto const offset = state_.dist_to_dest_.at(arr_candidate_segment);
+      auto const [_, _1, arr_l, arr_time] =
+          get_transport_info(arr_candidate_segment.value(), event_type::kArr);
+      if (arr_time + offset != j.arrival_time()) {
+        continue;
+      }
+
+      auto const offset_it =
+          utl::find_if(q.destination_, [&](routing::offset const& o) {
+            return o.target() == arr_l && o.duration() == offset;
+          });
+      utl::verify(offset_it != end(q.destination_), "offset not found");
+      j.legs_.push_back({direction::kForward, arr_l,
+                         get_special_station(special_station::kEnd), arr_time,
+                         j.arrival_time(), *offset_it});
       dest_segment = segment_idx_t{arr_candidate_segment.value()};
       break;
     }
+  } else /* Stop destination -> footpath or direct arrival */ {
 
-    for (auto const fp :
-         tt_.locations_.footpaths_out_[state_.tbd_.prf_idx_][arr_l]) {
-      if (handle_fp(fp)) {
+    for (auto arr_candidate_segment = state_.end_reachable_.next_set_bit(0);
+         arr_candidate_segment != std::nullopt;
+         arr_candidate_segment = state_.end_reachable_.next_set_bit(
+             static_cast<uint32_t>(arr_candidate_segment.value()) + 1)) {
+      as_debug("dest candidate {}", arr_candidate_segment.value());
+
+      if (!state_.settled_segments_.test(arr_candidate_segment.value())) {
+        as_debug("no dest candidate {} => has not been settled",
+                 arr_candidate_segment.value());
+        continue;
+      }
+
+      auto const [_, dep_l, arr_l, arr_time] =
+          get_transport_info(arr_candidate_segment.value(), event_type::kArr);
+
+      auto const handle_fp = [&](footpath const& fp) {
+        if (arr_time + fp.duration() != j.arrival_time() ||
+            !has_offset(q.destination_, q.dest_match_mode_, fp.target())) {
+          as_debug(
+              "no dest candidate {} arr_l={}: arr_time={} + fp.duration={} = "
+              "{} != j.arrival_time={}",
+              arr_candidate_segment.value(), arr_l, arr_time, fp.duration(),
+              location{tt_, arr_l}, arr_time, fp.duration(),
+              arr_time + fp.duration(), j.arrival_time());
+          return false;
+        }
+        as_debug("FOUND!");
+        j.dest_ = fp.target();
+        j.legs_.emplace_back(journey::leg{direction::kForward, arr_l,
+                                          fp.target(), arr_time,
+                                          j.arrival_time(), fp});
+        return true;
+      };
+
+      if (handle_fp(footpath{arr_l, duration_t{0}})) {
         dest_segment = segment_idx_t{arr_candidate_segment.value()};
         break;
       }
-    }
-    if (dest_segment != segment_idx_t::invalid()) {
-      break;
+
+      for (auto const fp :
+           tt_.locations_.footpaths_out_[state_.tbd_.prf_idx_][arr_l]) {
+        if (handle_fp(fp)) {
+          dest_segment = segment_idx_t{arr_candidate_segment.value()};
+          break;
+        }
+      }
+      if (dest_segment != segment_idx_t::invalid()) {
+        break;
+      }
     }
   }
 
@@ -404,14 +437,32 @@ void a_star::reconstruct(query const& q, journey& j) const {
   auto const start_time = j.start_time_;
   auto const first_dep_l = j.legs_.back().from_;
   auto const first_dep_time = j.legs_.back().dep_time_;
-  // TODO: add intermodal
-  for (auto const fp :
-       tt_.locations_.footpaths_in_[state_.tbd_.prf_idx_][first_dep_l]) {
-    if (start_time + fp.duration() <= first_dep_time &&
-        has_offset(q.start_, q.start_match_mode_, fp.target())) {
-      j.legs_.push_back({direction::kForward, fp.target(), first_dep_l,
-                         first_dep_time - fp.duration(), first_dep_time, fp});
-      break;
+  if (q.start_match_mode_ == location_match_mode::kIntermodal) {
+    auto const offset_it =
+        utl::find_if(q.start_, [&](routing::offset const& o) {
+          return o.target() == first_dep_l &&
+                 start_time + o.duration() <= first_dep_time;
+        });
+    utl::verify(
+        offset_it != end(q.start_),
+        "no start offset found start_time={}, first_dep={}@{}, offsets={}",
+        start_time, first_dep_time, location{tt_, first_dep_l},
+        q.start_ | std::views::transform([&](offset const& x) {
+          return std::pair{location{tt_, x.target_}, x.duration()};
+        }));
+    j.legs_.push_back(journey::leg{
+        direction::kForward, get_special_station(special_station::kStart),
+        first_dep_l, first_dep_time - offset_it->duration(), first_dep_time,
+        *offset_it});
+  } else {
+    for (auto const fp :
+         tt_.locations_.footpaths_in_[state_.tbd_.prf_idx_][first_dep_l]) {
+      if (start_time + fp.duration() <= first_dep_time &&
+          has_offset(q.start_, q.start_match_mode_, fp.target())) {
+        j.legs_.push_back({direction::kForward, fp.target(), first_dep_l,
+                           first_dep_time - fp.duration(), first_dep_time, fp});
+        break;
+      }
     }
   }
 }

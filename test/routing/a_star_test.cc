@@ -2,11 +2,14 @@
 #include "gtest/gtest.h"
 
 #include "nigiri/loader/gtfs/load_timetable.h"
+#include "nigiri/loader/hrd/load_timetable.h"
 #include "nigiri/loader/init_finish.h"
 #include "nigiri/routing/a_star/a_star.h"
 #include "nigiri/routing/search.h"
 #include "nigiri/routing/tb/preprocess.h"
 #include "nigiri/routing/tb/tb_data.h"
+
+#include "../loader/hrd/hrd_timetable.h"
 
 using namespace date;
 using namespace nigiri;
@@ -20,6 +23,15 @@ timetable load_gtfs(auto const& files) {
                     date::sys_days{2021_y / March / 8}};
   register_special_stations(tt);
   gtfs::load_timetable({}, source_idx_t{0}, files(), tt);
+  finalize(tt);
+  return tt;
+}
+
+timetable load_hrd(auto const& files) {
+  timetable tt;
+  tt.date_range_ = nigiri::test_data::hrd_timetable::full_period();
+  register_special_stations(tt);
+  hrd::load_timetable(source_idx_t{0U}, loader::hrd::hrd_5_20_26, files(), tt);
   finalize(tt);
   return tt;
 }
@@ -67,6 +79,27 @@ pareto_set<routing::journey> a_star_search(timetable const& tt,
       .destination_ = {{tt.locations_.location_id_to_idx_.at({to, src}),
                         0_minutes, 0U}},
       .use_start_footpaths_ = true};
+  return a_star_search(tt, tbd, std::move(q));
+}
+
+pareto_set<routing::journey> a_star_intermodal_search(
+    timetable const& tt,
+    tb::tb_data const& tbd,
+    std::vector<routing::offset> start,
+    std::vector<routing::offset> destination,
+    interval<unixtime_t> interval,
+    std::uint8_t const min_connection_count = 0U,
+    bool const extend_interval_earlier = false,
+    bool const extend_interval_later = false) {
+  auto q = routing::query{
+      .start_time_ = interval,
+      .start_match_mode_ = routing::location_match_mode::kIntermodal,
+      .dest_match_mode_ = routing::location_match_mode::kIntermodal,
+      .start_ = std::move(start),
+      .destination_ = std::move(destination),
+      .min_connection_count_ = min_connection_count,
+      .extend_interval_earlier_ = extend_interval_earlier,
+      .extend_interval_later_ = extend_interval_later};
   return a_star_search(tt, tbd, std::move(q));
 }
 
@@ -976,4 +1009,44 @@ TEST(a_star, midnight_cross) {
       tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}} + 11_hours);
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(midnight_cross_journey, results_str_as(results, tt));
+}
+
+constexpr auto const intermodal_abc_journey = R"(
+[2020-03-30 05:20, 2020-03-30 08:00]
+TRANSFERS: 1
+     FROM: (START, START) [2020-03-30 05:20]
+       TO: (END, END) [2020-03-30 08:00]
+leg 0: (START, START) [2020-03-30 05:20] -> (A, 0000001) [2020-03-30 05:30]
+  MUMO (id=99, duration=10)
+leg 1: (A, 0000001) [2020-03-30 05:30] -> (B, 0000002) [2020-03-30 06:30]
+   0: 0000001 A...............................................                               d: 30.03 05:30 [30.03 07:30]  [{name=RE 1337, day=2020-03-30, id=1337/0000001/330/0000002/390/, src=0}]
+   1: 0000002 B............................................... a: 30.03 06:30 [30.03 08:30]
+leg 2: (B, 0000002) [2020-03-30 06:30] -> (B, 0000002) [2020-03-30 06:32]
+  FOOTPATH (duration=2)
+leg 3: (B, 0000002) [2020-03-30 06:45] -> (C, 0000003) [2020-03-30 07:45]
+   0: 0000002 B...............................................                               d: 30.03 06:45 [30.03 08:45]  [{name=RE 7331, day=2020-03-30, id=7331/0000002/405/0000003/465/, src=0}]
+   1: 0000003 C............................................... a: 30.03 07:45 [30.03 09:45]
+leg 4: (C, 0000003) [2020-03-30 07:45] -> (END, END) [2020-03-30 08:00]
+  MUMO (id=77, duration=15)
+
+)";
+
+TEST(a_star, intermodal_abc) {
+  auto const tt = load_hrd(nigiri::test_data::hrd_timetable::files_abc);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_intermodal_search(
+      tt, tbd,
+      {{tt.locations_.location_id_to_idx_.at(
+            {.id_ = "0000001", .src_ = source_idx_t{0U}}),
+        10_minutes, 99U}},
+      {{tt.locations_.location_id_to_idx_.at(
+            {.id_ = "0000003", .src_ = source_idx_t{0U}}),
+        15_minutes, 77U}},
+      interval{unixtime_t{sys_days{March / 30 / 2020}} + 5_hours,
+               unixtime_t{sys_days{March / 30 / 2020}} + 6_hours});
+  for (auto const& j : results) {
+    j.print(std::cout, tt);
+  }
+  EXPECT_EQ(std::string_view{intermodal_abc_journey},
+            results_str_as(results, tt));
 }
