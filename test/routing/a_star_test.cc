@@ -24,7 +24,7 @@ timetable load_gtfs(auto const& files) {
   return tt;
 }
 
-std::string result_str(auto const& result, timetable const& tt) {
+std::string result_str_as(auto const& result, timetable const& tt) {
   std::stringstream ss;
   ss << "\n";
   result.print(ss, tt);
@@ -32,7 +32,7 @@ std::string result_str(auto const& result, timetable const& tt) {
   return ss.str();
 }
 
-std::string results_str(auto const& results, timetable const& tt) {
+std::string results_str_as(auto const& results, timetable const& tt) {
   std::stringstream ss;
   for (auto const& r : results) {
     ss << "\n";
@@ -281,7 +281,7 @@ TEST(a_star, reconstruct_only_one_segment_runs) {
            0_minutes, 0U}}};
 
   algo.reconstruct(q, j);
-  EXPECT_EQ(only_one_segment_runs_journey, result_str(j, tt));
+  EXPECT_EQ(only_one_segment_runs_journey, result_str_as(j, tt));
 }
 
 mem_dir multiple_segment_run_files() {
@@ -362,7 +362,7 @@ TEST(a_star, reconstruct_multiple_segment_runs) {
           {tt.locations_.location_id_to_idx_.at({"S2", source_idx_t{0}}),
            0_minutes, 0U}}};
   algo.reconstruct(q, j);
-  EXPECT_EQ(reconstruct_multiple_segment_runs_journey, result_str(j, tt));
+  EXPECT_EQ(reconstruct_multiple_segment_runs_journey, result_str_as(j, tt));
 }
 
 // ==================
@@ -437,7 +437,7 @@ TEST(a_star, execute_one_run_journey) {
   auto const results = a_star_search(tt, tbd, "S0", "S2",
                                      unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
-  EXPECT_EQ(execute_journey, results_str(results, tt));
+  EXPECT_EQ(execute_journey, results_str_as(results, tt));
 }
 
 mem_dir same_day_transfer_files_as() {
@@ -513,7 +513,7 @@ TEST(a_star, execute_multiple_segment_run) {
   auto const results = a_star_search(tt, tbd, "S0", "S2",
                                      unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
-  EXPECT_EQ(execute_multiple_segment_run_journey, results_str(results, tt));
+  EXPECT_EQ(execute_multiple_segment_run_journey, results_str_as(results, tt));
 }
 
 TEST(a_star, execute_same_day_transfer) {
@@ -522,7 +522,7 @@ TEST(a_star, execute_same_day_transfer) {
   auto const results = a_star_search(tt, tbd, "S0", "S2",
                                      unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
-  EXPECT_EQ(execute_same_day_transfer_journey, results_str(results, tt));
+  EXPECT_EQ(execute_same_day_transfer_journey, results_str_as(results, tt));
 }
 
 mem_dir footpaths_before_and_after_files() {
@@ -587,7 +587,7 @@ TEST(a_star, execute_footpaths_before_and_after) {
     j.print(std::cout, tt);
   }
   EXPECT_EQ(execute_footpaths_before_and_after_journey,
-            results_str(results, tt));
+            results_str_as(results, tt));
 }
 
 mem_dir next_day_transfer_files_as() {
@@ -650,7 +650,7 @@ TEST(a_star, execute_next_day_transfer) {
   auto const results = a_star_search(
       tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
   EXPECT_EQ(results.size(), 1U);
-  EXPECT_EQ(execute_next_day_transfer_journey, results_str(results, tt));
+  EXPECT_EQ(execute_next_day_transfer_journey, results_str_as(results, tt));
 }
 mem_dir transfer_to_journey_from_previous_day_files() {
   return mem_dir::read(R"(
@@ -715,7 +715,7 @@ TEST(a_star, execute_transfer_to_journey_from_previous_day) {
       tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 1_hours});
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(execute_transfer_to_journey_from_previous_day_journey,
-            results_str(results, tt));
+            results_str_as(results, tt));
 }
 
 mem_dir transfer_on_next_day_files_as() {
@@ -778,7 +778,7 @@ TEST(a_star, execute_transfer_on_next_day) {
   auto const results = a_star_search(
       tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
   EXPECT_EQ(results.size(), 1U);
-  EXPECT_EQ(execute_transfer_on_next_day_journey, results_str(results, tt));
+  EXPECT_EQ(execute_transfer_on_next_day_journey, results_str_as(results, tt));
 }
 
 mem_dir transfer_on_next_day_follow_up_files_as() {
@@ -852,7 +852,7 @@ TEST(a_star, execute_transfer_on_next_day_follow_up) {
       tt, tbd, "S0", "S3", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(execute_transfer_on_next_day_follow_up_journey,
-            results_str(results, tt));
+            results_str_as(results, tt));
 }
 
 mem_dir two_dest_segments_reached_files() {
@@ -915,7 +915,7 @@ TEST(a_star, execute_two_dest_segments_reached) {
                                      unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(execute_two_dest_segments_reached_journey,
-            results_str(results, tt));
+            results_str_as(results, tt));
 }
 
 // TODO: dest == start test
@@ -975,5 +975,5 @@ TEST(a_star, midnight_cross) {
   auto const results = a_star_search(
       tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}} + 11_hours);
   EXPECT_EQ(results.size(), 1U);
-  EXPECT_EQ(midnight_cross_journey, results_str(results, tt));
+  EXPECT_EQ(midnight_cross_journey, results_str_as(results, tt));
 }
