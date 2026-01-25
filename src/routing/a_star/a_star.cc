@@ -192,6 +192,8 @@ void a_star::execute(unixtime_t const start_time,
 
       if (!state_.tbd_.bitfields_[transfer.traffic_days_].test(
               current_transport_offset + base_.v_)) {
+        as_debug("Transfer {} - {} not active on day {}", segment, new_segment,
+                 current_transport_offset);
         continue;
       }
 
@@ -215,6 +217,7 @@ void a_star::execute(unixtime_t const start_time,
       }
     }
   }
+  stats_.no_journey_found_ = results.empty();
 }
 
 void a_star::add_start(location_idx_t l, unixtime_t t) {
@@ -249,9 +252,7 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
       state_.start_segments_.set(start_segment);
       as_debug("Adding start segment {} for location {}", start_segment,
                location{tt_, l});
-      state_.transport_day_offset_.emplace(
-          et.t_idx_,
-          static_cast<int8_t>(et.day_.v_) - static_cast<int8_t>(base_.v_));
+      state_.transport_day_offset_.emplace(et.t_idx_, et.day_ - base_);
     }
   }
 }

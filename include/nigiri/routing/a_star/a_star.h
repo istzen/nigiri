@@ -22,6 +22,7 @@ struct a_star_stats {
         {"n_dest_segments_reached", n_dest_segments_reached_},
         {"max_transfers_reached", max_transfers_reached_},
         {"max_travel_time_reached", max_travel_time_reached_},
+        {"no_journey_found", no_journey_found_},
     };
   }
 
@@ -29,6 +30,7 @@ struct a_star_stats {
   std::uint64_t n_dest_segments_reached_{0ULL};
   bool max_transfers_reached_{false};
   bool max_travel_time_reached_{false};
+  bool no_journey_found_{false};
 };
 
 struct a_star {

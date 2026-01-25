@@ -78,7 +78,8 @@ pareto_set<routing::journey> a_star_search(timetable const& tt,
                   0U}},
       .destination_ = {{tt.locations_.location_id_to_idx_.at({to, src}),
                         0_minutes, 0U}},
-      .use_start_footpaths_ = true};
+      .use_start_footpaths_ = true,
+      .max_transfers_ = 8};
   return a_star_search(tt, tbd, std::move(q));
 }
 
@@ -231,6 +232,22 @@ TEST(a_star, multiple_segment_run) {
   EXPECT_EQ(multiple_segment_run_journey, results_str_as(results, tt));
 }
 
+TEST(a_star, too_long_journey) {
+  auto const tt = load_gtfs(multiple_segment_run_files);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_search(
+      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 01 / 2021} + 13_hours});
+  EXPECT_EQ(results.size(), 0U);
+}
+
+TEST(a_star, start_segments_too_late) {
+  auto const tt = load_gtfs(multiple_segment_run_files);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_search(tt, tbd, "S0", "S2",
+                                     unixtime_t{sys_days{March / 01 / 2021}});
+  EXPECT_EQ(results.size(), 0U);
+}
+
 mem_dir footpaths_before_and_after_files() {
   return mem_dir::read(R"(
 # agency.txt
@@ -289,9 +306,6 @@ TEST(a_star, footpaths_before_and_after) {
   auto const results = a_star_search(tt, tbd, "S0", "S2",
                                      unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
-  for (auto j : results) {
-    j.print(std::cout, tt);
-  }
   EXPECT_EQ(footpaths_before_and_after_journey, results_str_as(results, tt));
 }
 
@@ -356,8 +370,6 @@ TEST(a_star, two_dest_segments_reached) {
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(two_dest_segments_reached_journey, results_str_as(results, tt));
 }
-
-// TODO: dest == start test
 
 mem_dir midnight_cross_files() {
   return mem_dir::read(R"(
@@ -744,6 +756,151 @@ TEST(a_star, transfer_on_next_day_follow_up) {
             results_str_as(results, tt));
 }
 
+mem_dir transfer_not_active_files() {
+  return mem_dir::read(R"(
+# agency.txt
+agency_id,agency_name,agency_url,agency_timezone
+DTA,Demo Transit Authority,,Europe/London
+
+# stops.txt
+stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
+S0,S0,,,,,,
+S1,S1,,,,,,
+S2,S2,,,,,,
+
+# calendar.txt
+service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+ALL,1,1,1,1,1,1,1,20210301,20210307
+WED,0,0,1,0,0,0,0,20210301,20210307
+
+# routes.txt
+route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
+R0,DTA,R0,R0,"S0 -> S1",2
+R1,DTA,R1,R1,"S0 -> S2",2
+R2,DTA,R2,R2,"S1 -> S2",2
+
+# trips.txt
+route_id,service_id,trip_id,trip_headsign,block_id
+R0,ALL,R0_ALL,R0_ALL,1
+R1,ALL,R1_ALL,R1_ALL,2
+R2,WED,R2_WED,R2_WED,3
+
+# stop_times.txt
+trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+R0_ALL,02:00:00,02:00:00,S0,0,0,0
+R0_ALL,03:00:00,03:00:00,S1,1,0,0
+R1_ALL,06:00:00,06:00:00,S0,0,0,0
+R1_ALL,08:00:00,08:00:00,S2,1,0,0
+R2_WED,03:30:00,03:30:00,S1,0,0,0
+R2_WED,04:00:00,04:00:00,S2,1,0,0
+)");
+}
+
+constexpr auto const transfer_not_active_journey = R"(
+[2021-03-02 00:00, 2021-03-02 08:00]
+TRANSFERS: 0
+     FROM: (S0, S0) [2021-03-02 06:00]
+       TO: (S2, S2) [2021-03-02 08:00]
+leg 0: (S0, S0) [2021-03-02 06:00] -> (S2, S2) [2021-03-02 08:00]
+   0: S0      S0..............................................                               d: 02.03 06:00 [02.03 06:00]  [{name=R1, day=2021-03-02, id=R1_ALL, src=0}]
+   1: S2      S2.............................................. a: 02.03 08:00 [02.03 08:00]
+leg 1: (S2, S2) [2021-03-02 08:00] -> (S2, S2) [2021-03-02 08:00]
+  FOOTPATH (duration=0)
+
+)";
+
+TEST(a_star, transfer_not_active) {
+  auto const tt = load_gtfs(transfer_not_active_files);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_search(tt, tbd, "S0", "S2",
+                                     unixtime_t{sys_days{March / 02 / 2021}});
+  EXPECT_EQ(results.size(), 1U);
+  EXPECT_EQ(transfer_not_active_journey, results_str_as(results, tt));
+}
+
+mem_dir too_many_transfers_files() {
+  return mem_dir::read(R"(
+# agency.txt
+agency_id,agency_name,agency_url,agency_timezone
+DTA,Demo Transit Authority,,Europe/London
+
+# stops.txt
+stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
+S0,S0,,,,,,
+S1,S1,,,,,,
+S2,S2,,,,,,
+S3,S3,,,,,,
+S4,S4,,,,,,
+S5,S5,,,,,,
+S6,S6,,,,,,
+S7,S7,,,,,,
+S8,S8,,,,,,
+S9,S9,,,,,,
+S10,S10,,,,,,
+
+# calendar.txt
+service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+TUE,0,1,0,0,0,0,0,20210301,20210307
+
+# routes.txt
+route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
+R0,DTA,R0,R0,"S0 -> S1",2
+R1,DTA,R1,R1,"S1 -> S2",2
+R2,DTA,R2,R2,"S2 -> S3",2
+R3,DTA,R3,R3,"S3 -> S4",2
+R4,DTA,R4,R4,"S4 -> S5",2
+R5,DTA,R5,R5,"S5 -> S6",2
+R6,DTA,R6,R6,"S6 -> S7",2
+R7,DTA,R7,R7,"S7 -> S8",2
+R8,DTA,R8,R8,"S8 -> S9",2
+R9,DTA,R9,R9,"S9 -> S10",2
+
+# trips.txt
+route_id,service_id,trip_id,trip_headsign,block_id
+R0,TUE,R0_TUE,R0_TUE,1
+R1,TUE,R1_TUE,R1_TUE,2
+R2,TUE,R2_TUE,R2_TUE,3
+R3,TUE,R3_TUE,R3_TUE,4
+R4,TUE,R4_TUE,R4_TUE,5
+R5,TUE,R5_TUE,R5_TUE,6
+R6,TUE,R6_TUE,R6_TUE,7
+R7,TUE,R7_TUE,R7_TUE,8
+R8,TUE,R8_TUE,R8_TUE,9
+R9,TUE,R9_TUE,R9_TUE,10
+
+# stop_times.txt
+trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+R0_TUE,01:00:00,01:00:00,S0,0,0,0
+R0_TUE,01:30:00,01:30:00,S1,1,0,0
+R1_TUE,02:00:00,02:00:00,S1,0,0,0
+R1_TUE,02:30:00,02:30:00,S2,1,0,0
+R2_TUE,03:00:00,03:00:00,S2,0,0,0
+R2_TUE,03:30:00,03:30:00,S3,1,0,0
+R3_TUE,04:00:00,04:00:00,S3,0,0,0
+R3_TUE,04:30:00,04:30:00,S4,1,0,0
+R4_TUE,05:00:00,05:00:00,S4,0,0,0
+R4_TUE,05:30:00,05:30:00,S5,1,0,0
+R5_TUE,06:00:00,06:00:00,S5,0,0,0
+R5_TUE,06:30:00,06:30:00,S6,1,0,0
+R6_TUE,07:00:00,07:00:00,S6,0,0,0
+R6_TUE,07:30:00,07:30:00,S7,1,0,0
+R7_TUE,08:00:00,08:00:00,S7,0,0,0
+R7_TUE,08:30:00,08:30:00,S8,1,0,0
+R8_TUE,09:00:00,09:00:00,S8,0,0,0
+R8_TUE,09:30:00,09:30:00,S9,1,0,0
+R9_TUE,10:00:00,10:00:00,S9,0,0,0
+R9_TUE,10:30:00,10:30:00,S10,1,0,0
+)");
+}
+
+TEST(a_star, too_many_transfers) {
+  auto const tt = load_gtfs(too_many_transfers_files);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_search(tt, tbd, "S0", "S10",
+                                     unixtime_t{sys_days{March / 02 / 2021}});
+  EXPECT_EQ(results.size(), 0U);
+}
+
 constexpr auto const intermodal_abc_journey = R"(
 [2020-03-30 05:20, 2020-03-30 08:00]
 TRANSFERS: 1
@@ -777,9 +934,6 @@ TEST(a_star, intermodal_abc) {
         15_minutes, 77U}},
       interval{unixtime_t{sys_days{March / 30 / 2020}} + 5_hours,
                unixtime_t{sys_days{March / 30 / 2020}} + 6_hours});
-  for (auto const& j : results) {
-    j.print(std::cout, tt);
-  }
   EXPECT_EQ(std::string_view{intermodal_abc_journey},
             results_str_as(results, tt));
 }

@@ -78,6 +78,10 @@ struct a_star_state {
     start_time_ = start_delta.mam();
     start_day_ = start_delta.days();
     start_segments_.for_each_set_bit([&](segment_idx_t const s) {
+      if (cost_function(queue_entry{s, 0}) > pq_.n_buckets()) [[unlikely]] {
+        as_debug("Skipping start segment {} as its cost is too high", s);
+        return;
+      }
       pq_.push(queue_entry{s, 0});
       pred_table_.emplace(s, startSegmentPredecessor);
     });
