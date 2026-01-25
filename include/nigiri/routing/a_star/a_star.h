@@ -18,13 +18,17 @@ using segment_idx_t = tb::segment_idx_t;
 struct a_star_stats {
   std::map<std::string, std::uint64_t> to_map() const {
     return {
-        {"n_segments_enqueued", n_segments_enqueued_},
-        {"n_journeys_found", n_journeys_found_},
+        {"n_segments_reached", n_segments_reached_},
+        {"n_dest_segments_reached", n_dest_segments_reached_},
+        {"max_transfers_reached", max_transfers_reached_},
+        {"max_travel_time_reached", max_travel_time_reached_},
     };
   }
 
-  std::uint64_t n_segments_enqueued_{0ULL};
-  std::uint64_t n_journeys_found_{0ULL};
+  std::uint64_t n_segments_reached_{0ULL};
+  std::uint64_t n_dest_segments_reached_{0ULL};
+  bool max_transfers_reached_{false};
+  bool max_travel_time_reached_{false};
 };
 
 struct a_star {

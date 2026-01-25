@@ -119,6 +119,7 @@ void a_star::execute(unixtime_t const start_time,
       continue;
     }
     state_.settled_segments_.set(segment, true);
+    stats_.n_segments_reached_++;
 
     as_debug("Visiting segment {} with transfers {}", segment,
              current.transfers_);
@@ -126,6 +127,7 @@ void a_star::execute(unixtime_t const start_time,
     if (state_.end_reachable_.test(segment)) [[unlikely]] {
       // check if the reached segment has a better cost_function than the
       // currently best one
+      stats_.n_dest_segments_reached_++;
       auto bucket = state_.cost_function(current);
       auto const it = state_.dist_to_dest_.find(segment);
       if (it != end(state_.dist_to_dest_)) {
@@ -169,6 +171,7 @@ void a_star::execute(unixtime_t const start_time,
       } else {
         as_debug("Next segment {} arrival time {} exceeds worst arrival {}",
                  next_segment, next_stop_arr, worst_delta);
+        stats_.max_travel_time_reached_ = true;
       }
     }
     // Handle transfers
@@ -176,6 +179,7 @@ void a_star::execute(unixtime_t const start_time,
     // Check if max transfers reached
     if (current.transfers_ >= max_transfers) [[unlikely]] {
       as_debug("Max transfers reached at segment {}", segment);
+      stats_.max_transfers_reached_ = true;
       continue;
     }
     // Explore neighbors (transfers)
