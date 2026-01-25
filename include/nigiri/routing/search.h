@@ -346,9 +346,6 @@ struct search {
             .algo_stats_ = algo_.get_stats().to_map()};
   }
 
-  // TODO: remove once tests are not needed anymore
-  Algo& get_algo() { return algo_; };
-
 private:
   bool is_ontrip() const {
     return holds_alternative<unixtime_t>(q_.start_time_);

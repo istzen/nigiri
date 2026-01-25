@@ -12,14 +12,9 @@ namespace nigiri::routing {
 
 using tb_data = tb::tb_data;
 using segment_idx_t = tb::segment_idx_t;
-
-// TODO: think about changing the values to smaller size
-using arrival_time_map =
-    hash_map<segment_idx_t,
-             minutes_after_midnight_t>;  // segment -> arrival_time mapping
-using day_index_map =
-    hash_map<segment_idx_t, day_idx_t>;  // segment -> arrival_day
-using pred_table = hash_map<segment_idx_t, segment_idx_t>;  // pred_table
+using arrival_time_map = hash_map<segment_idx_t, minutes_after_midnight_t>;
+using day_index_map = hash_map<segment_idx_t, day_idx_t>;
+using pred_table = hash_map<segment_idx_t, segment_idx_t>;
 
 struct queue_entry {
   queue_entry(segment_idx_t const s, std::uint8_t t)
@@ -34,8 +29,6 @@ struct a_star_state {
       segment_idx_t::invalid();
 
   a_star_state(tb_data const& tbd)
-      // TODO: thing about bucket size, since maxASTravelTime might be too small
-      // as there could be a jounrey longer than that due to transfers
       : tbd_{tbd}, pq_{maxASTravelTime.count(), get_bucket_a_star(*this)} {
     end_reachable_.resize(tbd.segment_transfers_.size());
     settled_segments_.resize(tbd.segment_transfers_.size());
@@ -114,29 +107,19 @@ struct a_star_state {
     a_star_state const& state_;
   };
 
-  tb_data const& tbd_;  // preprocessed tb data
-
-  arrival_time_map arrival_time_;  // segment -> arrival_time
-  day_index_map arrival_day_;  // segment -> arrival_day
-  pred_table pred_table_;  // predecessor table
-  hash_map<segment_idx_t, duration_t>
-      dist_to_dest_;  // segment -> distance to destination
-  dial<queue_entry, get_bucket_a_star> pq_;  // priority_queue
-  bitvec_map<segment_idx_t>
-      end_reachable_;  // segments from which the destination is reachable
-  bitvec_map<segment_idx_t>
-      settled_segments_;  // segments whose shortest path is finalized
-  bitvec_map<segment_idx_t>
-      start_segments_;  // segments that are start segments
-  float transfer_factor_;  // default value
-  uint16_t start_day_ =
-      std::numeric_limits<uint16_t>::max();  // day_idx_t of start_time
-  uint16_t start_time_ =
-      std::numeric_limits<uint16_t>::max();  // minutes_after_midnight_t
-                                             // of start_time
-  hash_map<transport_idx_t, int8_t>
-      transport_day_offset_;  // start_index for transport to calculate the
-                              // correct times
+  tb_data const& tbd_;
+  arrival_time_map arrival_time_;
+  day_index_map arrival_day_;
+  pred_table pred_table_;
+  hash_map<segment_idx_t, duration_t> dist_to_dest_;
+  dial<queue_entry, get_bucket_a_star> pq_;
+  bitvec_map<segment_idx_t> end_reachable_;
+  bitvec_map<segment_idx_t> settled_segments_;
+  bitvec_map<segment_idx_t> start_segments_;
+  float transfer_factor_;
+  uint16_t start_day_ = std::numeric_limits<uint16_t>::max();
+  uint16_t start_time_ = std::numeric_limits<uint16_t>::max();
+  hash_map<transport_idx_t, day_idx_t> transport_day_offset_;
 
 private:
   // Refactored part of cost function

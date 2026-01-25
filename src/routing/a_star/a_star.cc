@@ -42,7 +42,7 @@ a_star::a_star(timetable const& tt,
       is_dest_{is_dest},
       dist_to_dest_{dist_to_dest},
       lb_{lb},
-      base_{base} {  // TODO: where does this come from? (-5)
+      base_{base - QUERY_DAY_SHIFT} {
   state_.transfer_factor_ = tts.factor_;
   // Get segments leading to dest from location_idx_t l
   // * Used from query_engine
@@ -131,7 +131,7 @@ void a_star::execute(unixtime_t const start_time,
       auto bucket = state_.cost_function(current);
       auto const it = state_.dist_to_dest_.find(segment);
       if (it != end(state_.dist_to_dest_)) {
-        bucket += static_cast<uint16_t>(it->second.count());
+        bucket += it->second.count();
       }
       if (bucket >= current_best_arrival) {
         continue;
@@ -176,37 +176,36 @@ void a_star::execute(unixtime_t const start_time,
     }
     // Handle transfers
 
-    // Check if max transfers reached
     if (current.transfers_ >= max_transfers) [[unlikely]] {
       as_debug("Max transfers reached at segment {}", segment);
       stats_.max_transfers_reached_ = true;
       continue;
     }
-    // Explore neighbors (transfers)
+
     for (auto const& transfer : state_.tbd_.segment_transfers_[segment]) {
-      // Check if segment_to is already settled
       auto const new_segment = transfer.to_segment_;
       if (state_.settled_segments_.test(new_segment)) {
         continue;
       }
-      // Check if transfer is valid on the day
-      if (state_.tbd_.bitfields_[transfer.traffic_days_].test(
-              to_idx(state_.arrival_day_[segment]))) {
+      auto const current_transport_offset =
+          to_idx(state_.transport_day_offset_.at(transport_current));
+
+      if (!state_.tbd_.bitfields_[transfer.traffic_days_].test(
+              current_transport_offset + base_.v_)) {
         continue;
       }
-      // Handle new_segment
+
       auto const transport_new = state_.tbd_.segment_transports_[new_segment];
       auto const to = static_cast<stop_idx_t>(
           to_idx(new_segment -
                  state_.tbd_.transport_first_segment_[transport_new] + 1));
 
       auto const new_mam = tt_.event_mam(transport_new, to, event_type::kArr);
-      auto const current_transport_offset =
-          state_.transport_day_offset_[transport_current];
+
       auto const new_arrival_time = delta{
-          static_cast<uint16_t>(transfer.get_day_offset() + new_mam.days() +
-                                current_transport_offset),
-          static_cast<uint16_t>(new_mam.mam())};
+          static_cast<std::uint16_t>(transfer.get_day_offset() +
+                                     new_mam.days() + current_transport_offset),
+          static_cast<std::uint16_t>(new_mam.mam())};
       if (new_arrival_time.count() < worst_delta.count()) {
         state_.update_segment(new_segment, new_arrival_time, segment,
                               static_cast<uint8_t>(current.transfers_ + 1));
@@ -245,12 +244,7 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
           state_.tbd_.transport_first_segment_[et.t_idx_] + i;
       auto arr_time = event_day_idx_mam(et, static_cast<stop_idx_t>(i + 1),
                                         event_type::kArr);
-      auto [_, inserted] =
-          state_.arrival_day_.emplace(start_segment, arr_time.days());
-      // TODO: debug print
-      assert(inserted ||
-             state_.arrival_day_.at(start_segment) == arr_time.days() &&
-                 "add_start: start segment already in arrival_day_ map");
+      state_.arrival_day_.emplace(start_segment, arr_time.days());
       state_.arrival_time_.emplace(start_segment, arr_time.mam());
       state_.start_segments_.set(start_segment);
       as_debug("Adding start segment {} for location {}", start_segment,
@@ -277,7 +271,7 @@ void a_star::reconstruct(query const& q, journey& j) const {
                                       event_type const ev_type)
       -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
     auto const t = state_.tbd_.segment_transports_[s];
-    auto const d = base_ + state_.transport_day_offset_[t];
+    auto const d = base_ + state_.transport_day_offset_[t].v_;
     auto const i = static_cast<stop_idx_t>(
         to_idx(s - state_.tbd_.transport_first_segment_[t] +
                (ev_type == event_type::kArr ? 1 : 0)));
@@ -405,7 +399,7 @@ void a_star::reconstruct(query const& q, journey& j) const {
       current = pred;
       continue;
     }
-    // TODO: this could be implemented nicer
+
     if (j.legs_.size() != 1) {
       auto const fp = get_fp(arr_l, j.legs_.back().from_);
       j.legs_.emplace_back(journey::leg{direction::kForward, arr_l,

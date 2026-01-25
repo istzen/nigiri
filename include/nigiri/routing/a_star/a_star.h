@@ -39,30 +39,21 @@ struct a_star {
   static constexpr auto const kUnreachable =
       std::numeric_limits<std::uint16_t>::max();
 
-  a_star(
-      timetable const&,  // timetable
-      rt_timetable const*,  // rt timetable
-      a_star_state&,  // algo state
-      bitvec const& is_dest,  // bitvec of destination segments
-      std::array<bitvec, kMaxVias> const&,  // via segments
-      std::vector<std::uint16_t> const&
-          dist_to_dest,  // dest segments -> distance to dest in minutes for
-                         // dest segments in intermodal case
-      hash_map<location_idx_t,
-               std::vector<td_offset>> const&,  // location_idx_t -> td_offsets
-                                                // (valid_from, duration,
-                                                // transport_mode_id)
-      std::vector<std::uint16_t> const&
-          lb,  // travel_time_lower_bound estimate for each segment // TODO:
-               // check if true
-      std::vector<via_stop> const&,  // via stops
-      day_idx_t base,  // base day idx, presumably of start time
-      clasz_mask_t,  // allowed clasz mask
-      bool,  // require_bikes_allowed
-      bool,  // require_cars_allowed
-      bool,  // is wheelchair profile
-      transfer_time_settings);  // contains tranfer time factor in factor_ and
-                                // min_transfer_time_
+  a_star(timetable const& tt,
+         rt_timetable const*,
+         a_star_state& state,
+         bitvec const& is_dest,
+         std::array<bitvec, kMaxVias> const&,
+         std::vector<std::uint16_t> const& dist_to_dest,
+         hash_map<location_idx_t, std::vector<td_offset>> const&,
+         std::vector<std::uint16_t> const& lb,
+         std::vector<via_stop> const&,
+         day_idx_t base,
+         clasz_mask_t,
+         bool,
+         bool,
+         bool,
+         transfer_time_settings tts);
 
   algo_stats_t get_stats() const { return stats_; };
 
@@ -82,28 +73,24 @@ struct a_star {
 
   void reconstruct(query const& q, journey& j) const;
 
-  delta event_day_idx_mam(transport t,
-                          stop_idx_t const s_idx,
-                          event_type const et) {
-    auto const arr_time = tt_.event_mam(t.t_idx_, s_idx, et);
-    return delta{static_cast<uint16_t>(to_idx(t.day_ - base_) + arr_time.days_),
-                 arr_time.mam_};
-  };
-
   delta event_day_idx_mam(transport_idx_t t_idx,
                           stop_idx_t const s_idx,
                           event_type const et) {
     assert(state_.transport_day_offset_.contains(t_idx) &&
            "invalid transport call");
+
     auto const arr_time = tt_.event_mam(t_idx, s_idx, et);
-    return delta{static_cast<uint16_t>(state_.transport_day_offset_.at(t_idx) +
-                                       arr_time.days_),
-                 arr_time.mam_};
+    return delta{
+        static_cast<std::uint16_t>(
+            arr_time.days_ + to_idx(state_.transport_day_offset_.at(t_idx))),
+        arr_time.mam_};
   }
 
-  delta day_idx_mam(unixtime_t const ut) const {
-    auto const [d, t] = tt_.day_idx_mam(ut);
-    return day_idx_mam(d, t);
+  delta event_day_idx_mam(transport t,
+                          stop_idx_t const s_idx,
+                          event_type const et) {
+    state_.transport_day_offset_.emplace(t.t_idx_, t.day_.v_ - base_.v_);
+    return event_day_idx_mam(t.t_idx_, s_idx, et);
   };
 
   delta day_idx_mam(day_idx_t const day,
@@ -111,12 +98,18 @@ struct a_star {
     return delta{to_idx(day - base_), static_cast<std::uint16_t>(mam.count())};
   };
 
+  delta day_idx_mam(unixtime_t const ut) const {
+    auto const [d, t] = tt_.day_idx_mam(ut);
+    return day_idx_mam(d, t);
+  };
+
   unixtime_t segment_arrival_time(segment_idx_t const segment) const {
-    auto const day_idx = state_.arrival_day_.find(segment);
-    auto const time_it = state_.arrival_time_.find(segment);
-    assert(day_idx != state_.arrival_day_.end());
-    assert(time_it != state_.arrival_time_.end());
-    return tt_.to_unixtime(base_ + day_idx->second, time_it->second);
+    assert(state_.arrival_day_.contains(segment) &&
+           "segment has no arrival time");
+
+    auto const day_idx = state_.arrival_day_.at(segment);
+    auto const time = state_.arrival_time_.at(segment);
+    return tt_.to_unixtime(base_ + day_idx.v_, time);
   };
 
 private:
