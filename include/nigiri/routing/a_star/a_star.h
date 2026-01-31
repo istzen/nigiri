@@ -88,13 +88,6 @@ struct a_star {
         arr_time.mam_};
   }
 
-  delta event_day_idx_mam(transport t,
-                          stop_idx_t const s_idx,
-                          event_type const et) {
-    state_.transport_day_offset_.emplace(t.t_idx_, t.day_.v_ - base_.v_);
-    return event_day_idx_mam(t.t_idx_, s_idx, et);
-  };
-
   delta day_idx_mam(day_idx_t const day,
                     minutes_after_midnight_t const mam) const {
     return delta{to_idx(day - base_), static_cast<std::uint16_t>(mam.count())};

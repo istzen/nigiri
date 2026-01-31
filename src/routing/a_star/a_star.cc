@@ -16,8 +16,8 @@
 #include "nigiri/timetable.h"
 #include "nigiri/types.h"
 
-#define as_debug fmt::println
-// #define as_debug(...)
+// #define as_debug fmt::println
+#define as_debug(...)
 
 namespace nigiri {
 namespace routing {
@@ -44,8 +44,7 @@ a_star::a_star(timetable const& tt,
       lb_{lb},
       base_{base - QUERY_DAY_SHIFT} {
   state_.transfer_factor_ = tts.factor_;
-  // Get segments leading to dest from location_idx_t l
-  // * Used from query_engine
+
   auto const mark_dest_segments = [&](location_idx_t const l,
                                       duration_t const d) {
     for (auto const r : tt_.location_routes_[l]) {
@@ -97,24 +96,22 @@ void a_star::execute(unixtime_t const start_time,
                      unixtime_t const worst_time_at_dest,
                      profile_idx_t const,
                      pareto_set<journey>& results) {
-  // Setup state and other stuff
   auto const start_delta = day_idx_mam(start_time);
   state_.setup(start_delta);
-  // Limit to either worst_time_at_dest or maxASTravelTime starting from
-  // start_time
   delta const worst_delta =
       std::min(day_idx_mam(worst_time_at_dest),
                delta(maxASTravelTime.count() + start_delta.count()));
+
   uint16_t current_best_arrival = std::numeric_limits<uint16_t>::max();
   while (!state_.pq_.empty()) {
     auto const& current = state_.pq_.top();
-    // Terminate if the lowest bucket is worse than the current best arrival
+
     if (state_.cost_function(current) > current_best_arrival) {
       return;
     }
     state_.pq_.pop();
     auto const& segment = current.segment_;
-    // Check if segment is already settled in case of multiple entries in pq
+
     if (state_.settled_segments_.test(segment)) {
       continue;
     }
@@ -124,9 +121,7 @@ void a_star::execute(unixtime_t const start_time,
     as_debug("Visiting segment {} with transfers {}", segment,
              current.transfers_);
 
-    if (state_.end_reachable_.test(segment)) [[unlikely]] {
-      // check if the reached segment has a better cost_function than the
-      // currently best one
+    if (state_.end_reachable_.test(segment)) {
       stats_.n_dest_segments_reached_++;
       auto bucket = state_.cost_function(current);
       auto const it = state_.dist_to_dest_.find(segment);
@@ -153,29 +148,30 @@ void a_star::execute(unixtime_t const start_time,
            .dest_ = location_idx_t::invalid(),
            .transfers_ = static_cast<std::uint8_t>(current.transfers_)});
     }
-    // Handle next segment of transport if exists
-    auto const transport_current = state_.tbd_.segment_transports_[segment];
-    auto const rel_segment =
-        segment - state_.tbd_.transport_first_segment_[transport_current];
-    auto const segment_range = state_.tbd_.get_segment_range(transport_current);
-    auto const semgent_size = segment_range.size();
-    // Note: -1 needed since that means it's the last segment and has no next
-    if (rel_segment < semgent_size - 1) {
-      auto const next_segment = segment + 1;
-      auto const to = static_cast<stop_idx_t>(to_idx(rel_segment) + 2);
-      auto const next_stop_arr =
-          event_day_idx_mam(transport_current, to, event_type::kArr);
+    auto const handle_new_segment = [&](segment_idx_t s, transport_idx_t t,
+                                        bool transfer = false) {
+      auto const to = static_cast<stop_idx_t>(
+          to_idx(s - state_.tbd_.transport_first_segment_[t]) + 1);
+      auto const next_stop_arr = event_day_idx_mam(t, to, event_type::kArr);
       if (next_stop_arr.count() < worst_delta.count()) {
-        state_.update_segment(next_segment, next_stop_arr, segment,
-                              static_cast<uint8_t>(current.transfers_));
+        state_.update_segment(
+            s, next_stop_arr, segment,
+            transfer ? current.transfers_ + 1 : current.transfers_);
       } else {
-        as_debug("Next segment {} arrival time {} exceeds worst arrival {}",
-                 next_segment, next_stop_arr, worst_delta);
+        as_debug("Next segment {} arrival time {} exceeds worst arrival {}", s,
+                 next_stop_arr, worst_delta);
         stats_.max_travel_time_reached_ = true;
       }
+    };
+    // Handle next segment of transport if exists
+    auto const transport_idx_current = state_.tbd_.segment_transports_[segment];
+    auto const next_segment = segment + 1;
+    if (state_.tbd_.get_segment_range(transport_idx_current)
+            .contains(next_segment)) {
+      handle_new_segment(next_segment, transport_idx_current);
     }
-    // Handle transfers
 
+    // Handle transfers
     if (current.transfers_ >= max_transfers) [[unlikely]] {
       as_debug("Max transfers reached at segment {}", segment);
       stats_.max_transfers_reached_ = true;
@@ -188,40 +184,27 @@ void a_star::execute(unixtime_t const start_time,
         continue;
       }
       auto const current_transport_offset =
-          to_idx(state_.transport_day_offset_.at(transport_current));
+          state_.transport_day_offset_.at(transport_idx_current);
 
       if (!state_.tbd_.bitfields_[transfer.traffic_days_].test(
-              current_transport_offset + base_.v_)) {
+              to_idx(current_transport_offset + base_))) {
         as_debug("Transfer {} - {} not active on day {}", segment, new_segment,
                  current_transport_offset);
         continue;
       }
 
-      auto const transport_new = state_.tbd_.segment_transports_[new_segment];
-      auto const to = static_cast<stop_idx_t>(
-          to_idx(new_segment -
-                 state_.tbd_.transport_first_segment_[transport_new] + 1));
-
-      auto const new_mam = tt_.event_mam(transport_new, to, event_type::kArr);
-
-      auto const new_arrival_time = delta{
-          static_cast<std::uint16_t>(transfer.get_day_offset() +
-                                     new_mam.days() + current_transport_offset),
-          static_cast<std::uint16_t>(new_mam.mam())};
-      if (new_arrival_time.count() < worst_delta.count()) {
-        state_.update_segment(new_segment, new_arrival_time, segment,
-                              static_cast<uint8_t>(current.transfers_ + 1));
-        state_.transport_day_offset_.emplace(
-            transport_new,
-            transfer.get_day_offset() + current_transport_offset);
-      }
+      auto const transport_idx_new =
+          state_.tbd_.segment_transports_[new_segment];
+      state_.transport_day_offset_.emplace(
+          transport_idx_new,
+          current_transport_offset + transfer.get_day_offset());
+      handle_new_segment(new_segment, transport_idx_new, true);
     }
   }
   stats_.no_journey_found_ = results.empty();
 }
 
 void a_star::add_start(location_idx_t l, unixtime_t t) {
-  // * Used from query_engine
   auto const [day, mam] = tt_.day_idx_mam(t);
   for (auto const r : tt_.location_routes_[l]) {
     auto const stop_seq = tt_.route_location_seq_[r];
@@ -231,22 +214,22 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
         continue;
       }
 
-      auto const et = get_earliest_transport<direction::kForward>(
+      auto et = get_earliest_transport<direction::kForward>(
           tt_, tt_, 0U, r, i, day, mam, stp.location_idx(),
           [](day_idx_t, std::int16_t) { return false; });
       if (!et.is_valid()) {
         continue;
       }
 
-      auto const query_day_offset = to_idx(et.day_) - to_idx(base_);
-      if (query_day_offset < 0 || query_day_offset > kASMaxDayOffset) {
+      auto const transport_day_offset = to_idx(et.day_) - to_idx(base_);
+      if (transport_day_offset < 0 || transport_day_offset > kASMaxDayOffset) {
         continue;
       }
-
+      state_.transport_day_offset_.emplace(et.t_idx_, transport_day_offset);
+      auto const arr_time = event_day_idx_mam(
+          et.t_idx_, static_cast<stop_idx_t>(i + 1), event_type::kArr);
       auto const start_segment =
           state_.tbd_.transport_first_segment_[et.t_idx_] + i;
-      auto arr_time = event_day_idx_mam(et, static_cast<stop_idx_t>(i + 1),
-                                        event_type::kArr);
       state_.arrival_day_.emplace(start_segment, arr_time.days());
       state_.arrival_time_.emplace(start_segment, arr_time.mam());
       state_.start_segments_.set(start_segment);
