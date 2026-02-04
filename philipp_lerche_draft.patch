@@ -1,0 +1,1701 @@
+diff --git a/include/nigiri/routing/a_star/a_star.h b/include/nigiri/routing/a_star/a_star.h
+new file mode 100644
+index 0000000..4529a17
+--- /dev/null
++++ b/include/nigiri/routing/a_star/a_star.h
+@@ -0,0 +1,121 @@
++#pragma once
++
++#include "nigiri/common/dial.h"
++#include "nigiri/routing/a_star/a_star_state.h"
++#include "nigiri/routing/a_star/settings.h"
++#include "nigiri/routing/journey.h"
++#include "nigiri/routing/pareto_set.h"
++#include "nigiri/routing/tb/tb_data.h"
++#include "nigiri/timetable.h"
++#include "nigiri/types.h"
++
++namespace nigiri {
++namespace routing {
++
++using tb_data = tb::tb_data;
++using segment_idx_t = tb::segment_idx_t;
++
++struct a_star_stats {
++  std::map<std::string, std::uint64_t> to_map() const {
++    return {
++        {"n_segments_reached", n_segments_reached_},
++        {"n_dest_segments_reached", n_dest_segments_reached_},
++        {"max_transfers_reached", max_transfers_reached_},
++        {"max_travel_time_reached", max_travel_time_reached_},
++        {"no_journey_found", no_journey_found_},
++    };
++  }
++
++  std::uint64_t n_segments_reached_{0ULL};
++  std::uint64_t n_dest_segments_reached_{0ULL};
++  bool max_transfers_reached_{false};
++  bool max_travel_time_reached_{false};
++  bool no_journey_found_{false};
++};
++
++struct a_star {
++  using algo_state_t = a_star_state;
++  using algo_stats_t = a_star_stats;
++  static constexpr bool kUseLowerBounds = false;
++
++  static constexpr auto const kUnreachable =
++      std::numeric_limits<std::uint16_t>::max();
++
++  a_star(timetable const& tt,
++         rt_timetable const*,
++         a_star_state& state,
++         bitvec const& is_dest,
++         std::array<bitvec, kMaxVias> const&,
++         std::vector<std::uint16_t> const& dist_to_dest,
++         hash_map<location_idx_t, std::vector<td_offset>> const&,
++         std::vector<std::uint16_t> const& lb,
++         std::vector<via_stop> const&,
++         day_idx_t base,
++         clasz_mask_t,
++         bool,
++         bool,
++         bool,
++         transfer_time_settings tts);
++
++  algo_stats_t get_stats() const { return stats_; };
++
++  algo_state_t& get_state() { return state_; };
++
++  void reset_arrivals() { state_.reset(); };
++
++  void next_start_time() { state_.reset(); };
++
++  void add_start(location_idx_t, unixtime_t);
++
++  void execute(unixtime_t const start_time,
++               std::uint8_t const max_transfers,
++               unixtime_t const worst_time_at_dest,
++               profile_idx_t const,
++               pareto_set<journey>& results);
++
++  void reconstruct(query const& q, journey& j) const;
++
++  delta event_day_idx_mam(transport_idx_t t_idx,
++                          stop_idx_t const s_idx,
++                          event_type const et) {
++    assert(state_.transport_day_offset_.contains(t_idx) &&
++           "invalid transport call");
++
++    auto const arr_time = tt_.event_mam(t_idx, s_idx, et);
++    return delta{
++        static_cast<std::uint16_t>(
++            arr_time.days_ + to_idx(state_.transport_day_offset_.at(t_idx))),
++        arr_time.mam_};
++  }
++
++  delta day_idx_mam(day_idx_t const day,
++                    minutes_after_midnight_t const mam) const {
++    return delta{to_idx(day - base_), static_cast<std::uint16_t>(mam.count())};
++  };
++
++  delta day_idx_mam(unixtime_t const ut) const {
++    auto const [d, t] = tt_.day_idx_mam(ut);
++    return day_idx_mam(d, t);
++  };
++
++  unixtime_t segment_arrival_time(segment_idx_t const segment) const {
++    assert(state_.arrival_day_.contains(segment) &&
++           "segment has no arrival time");
++
++    auto const day_idx = state_.arrival_day_.at(segment);
++    auto const time = state_.arrival_time_.at(segment);
++    return tt_.to_unixtime(base_ + day_idx.v_, time);
++  };
++
++private:
++  timetable const& tt_;
++  a_star_state& state_;
++  bitvec const& is_dest_;
++  std::vector<std::uint16_t> const& dist_to_dest_;
++  std::vector<std::uint16_t> const& lb_;
++  day_idx_t const base_;
++  a_star_stats stats_;
++};
++
++}  // namespace routing
++}  // namespace nigiri
+\ No newline at end of file
+diff --git a/include/nigiri/routing/a_star/a_star_state.h b/include/nigiri/routing/a_star/a_star_state.h
+new file mode 100644
+index 0000000..69c07eb
+--- /dev/null
++++ b/include/nigiri/routing/a_star/a_star_state.h
+@@ -0,0 +1,139 @@
++#pragma once
++
++#include "nigiri/common/dial.h"
++#include "nigiri/routing/a_star/settings.h"
++#include "nigiri/routing/tb/tb_data.h"
++#include "nigiri/types.h"
++
++#define as_debug fmt::println
++// #define as_debug(...)
++
++namespace nigiri::routing {
++
++using tb_data = tb::tb_data;
++using segment_idx_t = tb::segment_idx_t;
++using arrival_time_map = hash_map<segment_idx_t, minutes_after_midnight_t>;
++using day_index_map = hash_map<segment_idx_t, day_idx_t>;
++using pred_table = hash_map<segment_idx_t, segment_idx_t>;
++
++struct queue_entry {
++  queue_entry(segment_idx_t const s, std::uint8_t t)
++      : segment_{s}, transfers_{t} {}
++
++  segment_idx_t const segment_;
++  std::uint8_t transfers_;
++};
++
++struct a_star_state {
++  static constexpr auto const startSegmentPredecessor =
++      segment_idx_t::invalid();
++
++  a_star_state(tb_data const& tbd)
++      : tbd_{tbd}, pq_{maxASTravelTime.count(), get_bucket_a_star(*this)} {
++    end_reachable_.resize(tbd.segment_transfers_.size());
++    settled_segments_.resize(tbd.segment_transfers_.size());
++    start_segments_.resize(tbd.segment_transfers_.size());
++  }
++
++  bool better_arrival(queue_entry qe, delta const new_arr) {
++    return !arrival_day_.contains(qe.segment_) ||
++           cost_function(qe, new_arr) > cost_function(qe);
++  }
++
++  // Standard cost function used in pq
++  uint16_t cost_function(queue_entry const& qe) const {
++    // * Debug asserts
++    assert(arrival_day_.contains(qe.segment_));
++    assert(arrival_time_.contains(qe.segment_));
++    auto const val =
++        cost_function(to_idx(arrival_day_.at(qe.segment_)),
++                      arrival_time_.at(qe.segment_).count(), qe.transfers_);
++    as_debug("Cost function for segment {}: {}", qe.segment_, val);
++    return val;
++  }
++
++  // Cost function used when a new arrival time is computed
++  uint16_t cost_function(queue_entry const& qe, delta const arr) const {
++    return cost_function(arr.days(), arr.mam(), qe.transfers_);
++  }
++
++  void update_segment(segment_idx_t const s,
++                      delta const new_arr,
++                      segment_idx_t pred,
++                      uint8_t transfers) {
++    if (better_arrival(queue_entry{s, transfers}, new_arr)) {
++      arrival_day_.insert_or_assign(s, day_idx_t{new_arr.days()});
++      arrival_time_.insert_or_assign(s,
++                                     minutes_after_midnight_t{new_arr.mam()});
++
++      pred_table_.insert_or_assign(s, pred);
++      pq_.push(queue_entry{s, transfers});
++    }
++  };
++
++  void setup(delta const start_delta) {
++    assert(start_time_ == std::numeric_limits<uint16_t>::max() &&
++           start_day_ == std::numeric_limits<uint16_t>::max() &&
++           "state has not been proberly reset before setup");
++    start_time_ = start_delta.mam();
++    start_day_ = start_delta.days();
++    start_segments_.for_each_set_bit([&](segment_idx_t const s) {
++      if (cost_function(queue_entry{s, 0}) > pq_.n_buckets()) [[unlikely]] {
++        as_debug("Skipping start segment {} as its cost is too high", s);
++        return;
++      }
++      pq_.push(queue_entry{s, 0});
++      pred_table_.emplace(s, startSegmentPredecessor);
++    });
++  }
++
++  void reset() {
++    pred_table_.clear();
++    pq_.clear();
++    settled_segments_.zero_out();
++    start_segments_.zero_out();
++    arrival_time_.clear();
++    arrival_day_.clear();
++    start_time_ = std::numeric_limits<uint16_t>::max();
++    start_day_ = std::numeric_limits<uint16_t>::max();
++  }
++
++  struct get_bucket_a_star {
++    using dist_t = std::uint16_t;
++
++    get_bucket_a_star(a_star_state const& state) : state_{state} {}
++
++    dist_t operator()(queue_entry const& q) const {
++      return state_.cost_function(q);
++    }
++
++  private:
++    a_star_state const& state_;
++  };
++
++  tb_data const& tbd_;
++  arrival_time_map arrival_time_;
++  day_index_map arrival_day_;
++  pred_table pred_table_;
++  hash_map<segment_idx_t, duration_t> dist_to_dest_;
++  dial<queue_entry, get_bucket_a_star> pq_;
++  bitvec_map<segment_idx_t> end_reachable_;
++  bitvec_map<segment_idx_t> settled_segments_;
++  bitvec_map<segment_idx_t> start_segments_;
++  float transfer_factor_;
++  uint16_t start_day_ = std::numeric_limits<uint16_t>::max();
++  uint16_t start_time_ = std::numeric_limits<uint16_t>::max();
++  hash_map<transport_idx_t, day_idx_t> transport_day_offset_;
++
++private:
++  // Refactored part of cost function
++  uint16_t cost_function(uint16_t const days,
++                         uint16_t const mam,
++                         uint8_t const transfers) const {
++    auto const val = (days - start_day_) * 24 * 60 + mam - start_time_ +
++                     transfer_factor_ * transfers;
++    assert(val >= 0 && "Cost function should always be positive or zero");
++    return val;
++  }
++};
++}  // namespace nigiri::routing
+\ No newline at end of file
+diff --git a/include/nigiri/routing/a_star/settings.h b/include/nigiri/routing/a_star/settings.h
+new file mode 100644
+index 0000000..e130d3f
+--- /dev/null
++++ b/include/nigiri/routing/a_star/settings.h
+@@ -0,0 +1,15 @@
++#pragma once
++
++#include "nigiri/types.h"
++
++// the position of the query day in the day offset
++#define QUERY_DAY_SHIFT 5
++
++namespace nigiri::routing {
++
++static constexpr auto const maxASTravelTime = 1_days;
++constexpr auto const kASMaxTravelTimeDays = 1U;
++constexpr auto const kASMaxDayOffset =
++    std::int8_t{kASMaxTravelTimeDays +
++                kTimetableOffset / 1_days};  // +5 for timetable offset
++}  // namespace nigiri::routing
+\ No newline at end of file
+diff --git a/src/routing/a_star/a_star.cc b/src/routing/a_star/a_star.cc
+new file mode 100644
+index 0000000..247e892
+--- /dev/null
++++ b/src/routing/a_star/a_star.cc
+@@ -0,0 +1,453 @@
++#include "nigiri/routing/a_star/a_star.h"
++
++#include <ranges>
++
++#include "fmt/ranges.h"
++
++#include "utl/enumerate.h"
++#include "utl/raii.h"
++
++#include "nigiri/common/dial.h"
++#include "nigiri/for_each_meta.h"
++#include "nigiri/routing/get_earliest_transport.h"
++#include "nigiri/routing/journey.h"
++#include "nigiri/routing/tb/tb_data.h"
++#include "nigiri/special_stations.h"
++#include "nigiri/timetable.h"
++#include "nigiri/types.h"
++
++// #define as_debug fmt::println
++#define as_debug(...)
++
++namespace nigiri {
++namespace routing {
++
++a_star::a_star(timetable const& tt,
++               rt_timetable const*,
++               a_star_state& state,
++               bitvec const& is_dest,
++               std::array<bitvec, kMaxVias> const&,
++               std::vector<std::uint16_t> const& dist_to_dest,
++               hash_map<location_idx_t, std::vector<td_offset>> const&,
++               std::vector<std::uint16_t> const& lb,
++               std::vector<via_stop> const&,
++               day_idx_t base,
++               clasz_mask_t,
++               bool,
++               bool,
++               bool,
++               transfer_time_settings tts)
++    : tt_{tt},
++      state_{state},
++      is_dest_{is_dest},
++      dist_to_dest_{dist_to_dest},
++      lb_{lb},
++      base_{base - QUERY_DAY_SHIFT} {
++  state_.transfer_factor_ = tts.factor_;
++
++  auto const mark_dest_segments = [&](location_idx_t const l,
++                                      duration_t const d) {
++    for (auto const r : tt_.location_routes_[l]) {
++      auto const stop_seq = tt_.route_location_seq_[r];
++      for (auto i = stop_idx_t{1U}; i != stop_seq.size(); ++i) {
++        auto const stp = stop{stop_seq[i]};
++        if (stp.location_idx() != l || !stp.out_allowed()) {
++          continue;
++        }
++
++        for (auto const t : tt_.route_transport_ranges_[r]) {
++          auto const segment = state_.tbd_.transport_first_segment_[t] + i - 1;
++          state_.end_reachable_.set(segment, true);
++          as_debug("Marking segment {} as reaching dest with dist {}", segment,
++                   d.count());
++
++          auto const it = state_.dist_to_dest_.find(segment);
++          if (it == end(state_.dist_to_dest_)) {
++            state_.dist_to_dest_.emplace_hint(it, segment, d);
++          } else {
++            it->second = std::min(it->second, d);
++          }
++        }
++      }
++    }
++  };
++
++  if (dist_to_dest.empty()) /* Destination is stop. */ {
++    is_dest_.for_each_set_bit([&](std::size_t const i) {
++      auto const l = location_idx_t{i};
++      as_debug("{} is dest!", location{tt_, l});
++      mark_dest_segments(l, duration_t{0U});
++      for (auto const fp :
++           tt_.locations_.footpaths_in_[state_.tbd_.prf_idx_][l]) {
++        mark_dest_segments(fp.target(), fp.duration());
++      }
++    });
++  } else /* Destination is coordinate. */ {
++    for (auto const [l_idx, dist] : utl::enumerate(dist_to_dest_)) {
++      if (dist != kUnreachable) {
++        mark_dest_segments(location_idx_t{l_idx}, duration_t{dist});
++      }
++    }
++  }
++};
++
++void a_star::execute(unixtime_t const start_time,
++                     std::uint8_t const max_transfers,
++                     unixtime_t const worst_time_at_dest,
++                     profile_idx_t const,
++                     pareto_set<journey>& results) {
++  auto const start_delta = day_idx_mam(start_time);
++  state_.setup(start_delta);
++  delta const worst_delta =
++      std::min(day_idx_mam(worst_time_at_dest),
++               delta(maxASTravelTime.count() + start_delta.count()));
++
++  uint16_t current_best_arrival = std::numeric_limits<uint16_t>::max();
++  while (!state_.pq_.empty()) {
++    auto const& current = state_.pq_.top();
++
++    if (state_.cost_function(current) > current_best_arrival) {
++      return;
++    }
++    state_.pq_.pop();
++    auto const& segment = current.segment_;
++
++    if (state_.settled_segments_.test(segment)) {
++      continue;
++    }
++    state_.settled_segments_.set(segment, true);
++    stats_.n_segments_reached_++;
++
++    as_debug("Visiting segment {} with transfers {}", segment,
++             current.transfers_);
++
++    if (state_.end_reachable_.test(segment)) {
++      stats_.n_dest_segments_reached_++;
++      auto bucket = state_.cost_function(current);
++      auto const it = state_.dist_to_dest_.find(segment);
++      if (it != end(state_.dist_to_dest_)) {
++        bucket += it->second.count();
++      }
++      if (bucket >= current_best_arrival) {
++        continue;
++      }
++      current_best_arrival = bucket;
++      auto dest_time = segment_arrival_time(segment);
++
++      if (it != end(state_.dist_to_dest_)) {
++        dest_time += it->second;
++      }
++      as_debug("Reached destination via segment {} at time: {}", segment,
++               dest_time);
++
++      results.clear();
++      results.add(
++          {.legs_{},
++           .start_time_ = start_time,
++           .dest_time_ = dest_time,
++           .dest_ = location_idx_t::invalid(),
++           .transfers_ = static_cast<std::uint8_t>(current.transfers_)});
++    }
++    auto const handle_new_segment = [&](segment_idx_t s, transport_idx_t t,
++                                        bool transfer = false) {
++      auto const to = static_cast<stop_idx_t>(
++          to_idx(s - state_.tbd_.transport_first_segment_[t]) + 1);
++      auto const next_stop_arr = event_day_idx_mam(t, to, event_type::kArr);
++      if (next_stop_arr.count() < worst_delta.count()) {
++        state_.update_segment(
++            s, next_stop_arr, segment,
++            transfer ? current.transfers_ + 1 : current.transfers_);
++      } else {
++        as_debug("Next segment {} arrival time {} exceeds worst arrival {}", s,
++                 next_stop_arr, worst_delta);
++        stats_.max_travel_time_reached_ = true;
++      }
++    };
++    // Handle next segment of transport if exists
++    auto const transport_idx_current = state_.tbd_.segment_transports_[segment];
++    auto const next_segment = segment + 1;
++    if (state_.tbd_.get_segment_range(transport_idx_current)
++            .contains(next_segment)) {
++      handle_new_segment(next_segment, transport_idx_current);
++    }
++
++    // Handle transfers
++    if (current.transfers_ >= max_transfers) [[unlikely]] {
++      as_debug("Max transfers reached at segment {}", segment);
++      stats_.max_transfers_reached_ = true;
++      continue;
++    }
++
++    for (auto const& transfer : state_.tbd_.segment_transfers_[segment]) {
++      auto const new_segment = transfer.to_segment_;
++      if (state_.settled_segments_.test(new_segment)) {
++        continue;
++      }
++      auto const current_transport_offset =
++          state_.transport_day_offset_.at(transport_idx_current);
++
++      if (!state_.tbd_.bitfields_[transfer.traffic_days_].test(
++              to_idx(current_transport_offset + base_))) {
++        as_debug("Transfer {} - {} not active on day {}", segment, new_segment,
++                 current_transport_offset);
++        continue;
++      }
++
++      auto const transport_idx_new =
++          state_.tbd_.segment_transports_[new_segment];
++      state_.transport_day_offset_.emplace(
++          transport_idx_new,
++          current_transport_offset + transfer.get_day_offset());
++      handle_new_segment(new_segment, transport_idx_new, true);
++    }
++  }
++  stats_.no_journey_found_ = results.empty();
++}
++
++void a_star::add_start(location_idx_t l, unixtime_t t) {
++  auto const [day, mam] = tt_.day_idx_mam(t);
++  for (auto const r : tt_.location_routes_[l]) {
++    auto const stop_seq = tt_.route_location_seq_[r];
++    for (auto i = stop_idx_t{0U}; i < stop_seq.size() - 1; ++i) {
++      auto const stp = stop{stop_seq[i]};
++      if (!stp.in_allowed() || stp.location_idx() != l) {
++        continue;
++      }
++
++      auto et = get_earliest_transport<direction::kForward>(
++          tt_, tt_, 0U, r, i, day, mam, stp.location_idx(),
++          [](day_idx_t, std::int16_t) { return false; });
++      if (!et.is_valid()) {
++        continue;
++      }
++
++      auto const transport_day_offset = to_idx(et.day_) - to_idx(base_);
++      if (transport_day_offset < 0 || transport_day_offset > kASMaxDayOffset) {
++        continue;
++      }
++      state_.transport_day_offset_.emplace(et.t_idx_, transport_day_offset);
++      auto const arr_time = event_day_idx_mam(
++          et.t_idx_, static_cast<stop_idx_t>(i + 1), event_type::kArr);
++      auto const start_segment =
++          state_.tbd_.transport_first_segment_[et.t_idx_] + i;
++      state_.arrival_day_.emplace(start_segment, arr_time.days());
++      state_.arrival_time_.emplace(start_segment, arr_time.mam());
++      state_.start_segments_.set(start_segment);
++      as_debug("Adding start segment {} for location {}", start_segment,
++               location{tt_, l});
++      state_.transport_day_offset_.emplace(et.t_idx_, et.day_ - base_);
++    }
++  }
++}
++
++void a_star::reconstruct(query const& q, journey& j) const {
++  UTL_FINALLY([&]() { std::reverse(begin(j.legs_), end(j.legs_)); });
++
++  auto const has_offset = [&](std::vector<offset> const& offsets,
++                              location_match_mode const match_mode,
++                              location_idx_t const l) {
++    return utl::any_of(offsets, [&](offset const& o) {
++      return matches(tt_, match_mode, o.target(), l);
++    });
++  };
++
++  auto const get_transport_info = [&](segment_idx_t const s,
++                                      event_type const ev_type)
++      -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
++    auto const t = state_.tbd_.segment_transports_[s];
++    auto const d = base_ + state_.transport_day_offset_[t].v_;
++    auto const i = static_cast<stop_idx_t>(
++        to_idx(s - state_.tbd_.transport_first_segment_[t] +
++               (ev_type == event_type::kArr ? 1 : 0)));
++    auto const loc_seq = tt_.route_location_seq_[tt_.transport_route_[t]];
++    return {{t, d},
++            i,
++            stop{loc_seq[i]}.location_idx(),
++            tt_.event_time({t, d}, i, ev_type)};
++  };
++
++  auto const get_fp = [&](location_idx_t const from, location_idx_t const to) {
++    if (from == to) {
++      return footpath{to, tt_.locations_.transfer_time_[from]};
++    }
++    auto const from_fps =
++        tt_.locations_.footpaths_out_[state_.tbd_.prf_idx_][from];
++    auto const it = utl::find_if(
++        from_fps, [&](footpath const& fp) { return fp.target() == to; });
++    utl::verify(it != end(from_fps),
++                "as  reconstruct: footpath from {} to {} not found",
++                location{tt_, from}, location{tt_, to});
++    return *it;
++  };
++
++  // ==================
++  // (1) Last leg
++  // ------------------
++  auto dest_segment = segment_idx_t::invalid();
++
++  if (q.dest_match_mode_ == location_match_mode::kIntermodal) {
++    for (auto arr_candidate_segment = state_.end_reachable_.next_set_bit(0);
++         arr_candidate_segment != std::nullopt;
++         arr_candidate_segment = state_.end_reachable_.next_set_bit(
++             static_cast<uint32_t>(arr_candidate_segment.value()) + 1)) {
++
++      if (!state_.settled_segments_.test(arr_candidate_segment.value())) {
++        continue;
++      }
++
++      auto const offset = state_.dist_to_dest_.at(arr_candidate_segment);
++      auto const [_, _1, arr_l, arr_time] =
++          get_transport_info(arr_candidate_segment.value(), event_type::kArr);
++      if (arr_time + offset != j.arrival_time()) {
++        continue;
++      }
++
++      auto const offset_it =
++          utl::find_if(q.destination_, [&](routing::offset const& o) {
++            return o.target() == arr_l && o.duration() == offset;
++          });
++      utl::verify(offset_it != end(q.destination_), "offset not found");
++      j.legs_.push_back({direction::kForward, arr_l,
++                         get_special_station(special_station::kEnd), arr_time,
++                         j.arrival_time(), *offset_it});
++      dest_segment = segment_idx_t{arr_candidate_segment.value()};
++      break;
++    }
++  } else /* Stop destination -> footpath or direct arrival */ {
++
++    for (auto arr_candidate_segment = state_.end_reachable_.next_set_bit(0);
++         arr_candidate_segment != std::nullopt;
++         arr_candidate_segment = state_.end_reachable_.next_set_bit(
++             static_cast<uint32_t>(arr_candidate_segment.value()) + 1)) {
++      as_debug("dest candidate {}", arr_candidate_segment.value());
++
++      if (!state_.settled_segments_.test(arr_candidate_segment.value())) {
++        as_debug("no dest candidate {} => has not been settled",
++                 arr_candidate_segment.value());
++        continue;
++      }
++
++      auto const [_, dep_l, arr_l, arr_time] =
++          get_transport_info(arr_candidate_segment.value(), event_type::kArr);
++
++      auto const handle_fp = [&](footpath const& fp) {
++        if (arr_time + fp.duration() != j.arrival_time() ||
++            !has_offset(q.destination_, q.dest_match_mode_, fp.target())) {
++          as_debug(
++              "no dest candidate {} arr_l={}: arr_time={} + fp.duration={} = "
++              "{} != j.arrival_time={}",
++              arr_candidate_segment.value(), arr_l, arr_time, fp.duration(),
++              location{tt_, arr_l}, arr_time, fp.duration(),
++              arr_time + fp.duration(), j.arrival_time());
++          return false;
++        }
++        as_debug("FOUND!");
++        j.dest_ = fp.target();
++        j.legs_.emplace_back(journey::leg{direction::kForward, arr_l,
++                                          fp.target(), arr_time,
++                                          j.arrival_time(), fp});
++        return true;
++      };
++
++      if (handle_fp(footpath{arr_l, duration_t{0}})) {
++        dest_segment = segment_idx_t{arr_candidate_segment.value()};
++        break;
++      }
++
++      for (auto const fp :
++           tt_.locations_.footpaths_out_[state_.tbd_.prf_idx_][arr_l]) {
++        if (handle_fp(fp)) {
++          dest_segment = segment_idx_t{arr_candidate_segment.value()};
++          break;
++        }
++      }
++      if (dest_segment != segment_idx_t::invalid()) {
++        break;
++      }
++    }
++  }
++
++  assert(dest_segment != segment_idx_t::invalid() &&
++         "no dest segment found in reconstruct");
++
++  // ==================
++  // (2) Transport legs
++  // ------------------
++  auto current = dest_segment;
++  auto [transport, arr_stop_idx, arr_l, arr_time] =
++      get_transport_info(dest_segment, event_type::kArr);
++  while (true) {
++    auto const pred = state_.pred_table_.at(current);
++    if (pred != state_.startSegmentPredecessor &&
++        transport.t_idx_ == state_.tbd_.segment_transports_[pred]) {
++      current = pred;
++      continue;
++    }
++
++    if (j.legs_.size() != 1) {
++      auto const fp = get_fp(arr_l, j.legs_.back().from_);
++      j.legs_.emplace_back(journey::leg{direction::kForward, arr_l,
++                                        j.legs_.back().from_, arr_time,
++                                        arr_time + fp.duration(), fp});
++    }
++    auto const [_, dep_stop_idx, dep_l, dep_time] =
++        get_transport_info(current, event_type::kDep);
++    j.legs_.emplace_back(journey::leg{
++        direction::kForward, dep_l, arr_l, dep_time, arr_time,
++        journey::run_enter_exit{
++            rt::run{
++                .t_ = transport,
++                .stop_range_ = {static_cast<stop_idx_t>(0U),
++                                static_cast<stop_idx_t>(
++                                    tt_.route_location_seq_
++                                        [tt_.transport_route_[transport.t_idx_]]
++                                            .size())}},
++            dep_stop_idx, arr_stop_idx}});
++    if (pred == state_.startSegmentPredecessor) {
++      break;
++    }
++
++    current = pred;
++    std::tie(transport, arr_stop_idx, arr_l, arr_time) =
++        get_transport_info(current, event_type::kArr);
++  }
++
++  // ==================
++  // (3) First leg
++  // ------------------
++  assert(!j.legs_.empty());
++  auto const start_time = j.start_time_;
++  auto const first_dep_l = j.legs_.back().from_;
++  auto const first_dep_time = j.legs_.back().dep_time_;
++  if (q.start_match_mode_ == location_match_mode::kIntermodal) {
++    auto const offset_it =
++        utl::find_if(q.start_, [&](routing::offset const& o) {
++          return o.target() == first_dep_l &&
++                 start_time + o.duration() <= first_dep_time;
++        });
++    utl::verify(
++        offset_it != end(q.start_),
++        "no start offset found start_time={}, first_dep={}@{}, offsets={}",
++        start_time, first_dep_time, location{tt_, first_dep_l},
++        q.start_ | std::views::transform([&](offset const& x) {
++          return std::pair{location{tt_, x.target_}, x.duration()};
++        }));
++    j.legs_.push_back(journey::leg{
++        direction::kForward, get_special_station(special_station::kStart),
++        first_dep_l, first_dep_time - offset_it->duration(), first_dep_time,
++        *offset_it});
++  } else {
++    for (auto const fp :
++         tt_.locations_.footpaths_in_[state_.tbd_.prf_idx_][first_dep_l]) {
++      if (start_time + fp.duration() <= first_dep_time &&
++          has_offset(q.start_, q.start_match_mode_, fp.target())) {
++        j.legs_.push_back({direction::kForward, fp.target(), first_dep_l,
++                           first_dep_time - fp.duration(), first_dep_time, fp});
++        break;
++      }
++    }
++  }
++}
++
++}  // namespace routing
++}  // namespace nigiri
+\ No newline at end of file
+diff --git a/test/routing/a_star_test.cc b/test/routing/a_star_test.cc
+new file mode 100644
+index 0000000..14d77a3
+--- /dev/null
++++ b/test/routing/a_star_test.cc
+@@ -0,0 +1,939 @@
++#include <chrono>
++#include "gtest/gtest.h"
++
++#include "nigiri/loader/gtfs/load_timetable.h"
++#include "nigiri/loader/hrd/load_timetable.h"
++#include "nigiri/loader/init_finish.h"
++#include "nigiri/routing/a_star/a_star.h"
++#include "nigiri/routing/search.h"
++#include "nigiri/routing/tb/preprocess.h"
++#include "nigiri/routing/tb/tb_data.h"
++
++#include "../loader/hrd/hrd_timetable.h"
++
++using namespace date;
++using namespace nigiri;
++using namespace nigiri::routing;
++using namespace nigiri::routing::tb;
++using namespace nigiri::loader;
++
++timetable load_gtfs(auto const& files) {
++  timetable tt;
++  tt.date_range_ = {date::sys_days{2021_y / March / 1},
++                    date::sys_days{2021_y / March / 8}};
++  register_special_stations(tt);
++  gtfs::load_timetable({}, source_idx_t{0}, files(), tt);
++  finalize(tt);
++  return tt;
++}
++
++timetable load_hrd(auto const& files) {
++  timetable tt;
++  tt.date_range_ = nigiri::test_data::hrd_timetable::full_period();
++  register_special_stations(tt);
++  hrd::load_timetable(source_idx_t{0U}, loader::hrd::hrd_5_20_26, files(), tt);
++  finalize(tt);
++  return tt;
++}
++
++std::string result_str_as(auto const& result, timetable const& tt) {
++  std::stringstream ss;
++  ss << "\n";
++  result.print(ss, tt);
++  ss << "\n";
++  return ss.str();
++}
++
++std::string results_str_as(auto const& results, timetable const& tt) {
++  std::stringstream ss;
++  for (auto const& r : results) {
++    ss << "\n";
++    r.print(ss, tt);
++    ss << "\n";
++  }
++  return ss.str();
++}
++
++pareto_set<routing::journey> a_star_search(timetable const& tt,
++                                           tb_data const& tbd,
++                                           routing::query q) {
++  static auto search_state = routing::search_state{};
++  auto algo_state = a_star_state{tbd};
++
++  return *(routing::search<direction::kForward, a_star>{
++      tt, nullptr, search_state, algo_state, std::move(q)}
++               .execute()
++               .journeys_);
++}
++
++pareto_set<routing::journey> a_star_search(timetable const& tt,
++                                           tb_data const& tbd,
++                                           std::string_view from,
++                                           std::string_view to,
++                                           routing::start_time_t const time) {
++  auto const src = source_idx_t{0};
++  auto q = routing::query{
++      .start_time_ = time,
++      .start_ = {{tt.locations_.location_id_to_idx_.at({from, src}), 0_minutes,
++                  0U}},
++      .destination_ = {{tt.locations_.location_id_to_idx_.at({to, src}),
++                        0_minutes, 0U}},
++      .use_start_footpaths_ = true,
++      .max_transfers_ = 8};
++  return a_star_search(tt, tbd, std::move(q));
++}
++
++pareto_set<routing::journey> a_star_intermodal_search(
++    timetable const& tt,
++    tb::tb_data const& tbd,
++    std::vector<routing::offset> start,
++    std::vector<routing::offset> destination,
++    interval<unixtime_t> interval,
++    std::uint8_t const min_connection_count = 0U,
++    bool const extend_interval_earlier = false,
++    bool const extend_interval_later = false) {
++  auto q = routing::query{
++      .start_time_ = interval,
++      .start_match_mode_ = routing::location_match_mode::kIntermodal,
++      .dest_match_mode_ = routing::location_match_mode::kIntermodal,
++      .start_ = std::move(start),
++      .destination_ = std::move(destination),
++      .min_connection_count_ = min_connection_count,
++      .extend_interval_earlier_ = extend_interval_earlier,
++      .extend_interval_later_ = extend_interval_later};
++  return a_star_search(tt, tbd, std::move(q));
++}
++
++mem_dir one_run_journey_files() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++S3,S3,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R0,R0,"S0 -> S1",2
++R1,DTA,R1,R1,"S1 -> S2",2
++R2,DATA,R2,R2,"S0 -> S2",2
++R3,DTA,R3,R3,"S3 -> S0 -> S2 -> S1",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_TUE,R0_TUE,1
++R1,TUE,R1_TUE,R1_TUE,2
++R2,TUE,R2_TUE,R2_TUE,3
++R3,TUE,R3_TUE,R3_TUE,4
++R0,TUE,R0B_TUE,R0B_TUE,5
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_TUE,05:00:00,05:00:00,S0,0,0,0
++R0_TUE,06:00:00,06:00:00,S1,1,0,0
++R1_TUE,12:00:00,12:00:00,S1,0,0,0
++R1_TUE,13:00:00,13:00:00,S2,1,0,0
++R2_TUE,01:00:00,01:00:00,S0,0,0,0
++R2_TUE,11:00:00,11:00:00,S2,1,0,0
++R3_TUE,04:30:00,04:30:00,S3,0,0,0
++R3_TUE,05:31:00,05:31:00,S0,1,0,0
++R3_TUE,07:00:00,07:00:00,S2,2,0,0
++R3_TUE,13:00:00,13:00:00,S1,3,0,0
++R0B_TUE,06:30:00,06:30:00,S0,0,0,0
++R0B_TUE,06:00:00,06:00:00,S1,1,0,0
++)");
++}
++
++constexpr auto const one_run_journey = R"(
++[2021-03-02 00:00, 2021-03-02 07:00]
++TRANSFERS: 0
++     FROM: (S0, S0) [2021-03-02 05:31]
++       TO: (S2, S2) [2021-03-02 07:00]
++leg 0: (S0, S0) [2021-03-02 05:31] -> (S2, S2) [2021-03-02 07:00]
++   1: S0      S0..............................................                               d: 02.03 05:31 [02.03 05:31]  [{name=R3, day=2021-03-02, id=R3_TUE, src=0}]
++   2: S2      S2.............................................. a: 02.03 07:00 [02.03 07:00]
++leg 1: (S2, S2) [2021-03-02 07:00] -> (S2, S2) [2021-03-02 07:00]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, one_run_journey) {
++  auto const tt = load_gtfs(one_run_journey_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(tt, tbd, "S0", "S2",
++                                     unixtime_t{sys_days{March / 02 / 2021}});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(one_run_journey, results_str_as(results, tt));
++}
++
++mem_dir multiple_segment_run_files() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++S3,S3,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R3,R3,"S0 -> S3 -> S1 -> S2",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_MON,R0_MON,1
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_MON,04:30:00,04:30:00,S0,0,0,0
++R0_MON,05:30:00,05:30:00,S3,1,0,0
++R0_MON,13:00:00,13:00:00,S1,2,0,0
++R0_MON,14:00:00,14:00:00,S2,3,0,0
++)");
++}
++
++constexpr auto const multiple_segment_run_journey = R"(
++[2021-03-02 00:00, 2021-03-02 14:00]
++TRANSFERS: 0
++     FROM: (S0, S0) [2021-03-02 04:30]
++       TO: (S2, S2) [2021-03-02 14:00]
++leg 0: (S0, S0) [2021-03-02 04:30] -> (S2, S2) [2021-03-02 14:00]
++   0: S0      S0..............................................                               d: 02.03 04:30 [02.03 04:30]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
++   1: S3      S3.............................................. a: 02.03 05:30 [02.03 05:30]  d: 02.03 05:30 [02.03 05:30]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
++   2: S1      S1.............................................. a: 02.03 13:00 [02.03 13:00]  d: 02.03 13:00 [02.03 13:00]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
++   3: S2      S2.............................................. a: 02.03 14:00 [02.03 14:00]
++leg 1: (S2, S2) [2021-03-02 14:00] -> (S2, S2) [2021-03-02 14:00]
++  FOOTPATH (duration=0)
++
++)";
++TEST(a_star, multiple_segment_run) {
++  auto const tt = load_gtfs(multiple_segment_run_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(tt, tbd, "S0", "S2",
++                                     unixtime_t{sys_days{March / 02 / 2021}});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(multiple_segment_run_journey, results_str_as(results, tt));
++}
++
++TEST(a_star, too_long_journey) {
++  auto const tt = load_gtfs(multiple_segment_run_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(
++      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 01 / 2021} + 13_hours});
++  EXPECT_EQ(results.size(), 0U);
++}
++
++TEST(a_star, start_segments_too_late) {
++  auto const tt = load_gtfs(multiple_segment_run_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(tt, tbd, "S0", "S2",
++                                     unixtime_t{sys_days{March / 01 / 2021}});
++  EXPECT_EQ(results.size(), 0U);
++}
++
++mem_dir footpaths_before_and_after_files() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++S3,S3,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R3,R3,"S1 -> S3",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_MON,R0_MON,1
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_MON,06:00:00,06:00:00,S1,0,0,0
++R0_MON,07:00:00,07:00:00,S3,1,0,0
++
++# transfers.txt
++from_stop_id,to_stop_id,transfer_type,min_transfer_time
++S0,S1,2,900
++S3,S2,2,600
++)");
++}
++
++constexpr auto const footpaths_before_and_after_journey = R"(
++[2021-03-02 00:00, 2021-03-02 07:10]
++TRANSFERS: 0
++     FROM: (S0, S0) [2021-03-02 05:45]
++       TO: (S2, S2) [2021-03-02 07:10]
++leg 0: (S0, S0) [2021-03-02 05:45] -> (S1, S1) [2021-03-02 06:00]
++  FOOTPATH (duration=15)
++leg 1: (S1, S1) [2021-03-02 06:00] -> (S3, S3) [2021-03-02 07:00]
++   0: S1      S1..............................................                               d: 02.03 06:00 [02.03 06:00]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
++   1: S3      S3.............................................. a: 02.03 07:00 [02.03 07:00]
++leg 2: (S3, S3) [2021-03-02 07:00] -> (S2, S2) [2021-03-02 07:10]
++  FOOTPATH (duration=10)
++
++)";
++
++TEST(a_star, footpaths_before_and_after) {
++  auto const tt = load_gtfs(footpaths_before_and_after_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(tt, tbd, "S0", "S2",
++                                     unixtime_t{sys_days{March / 02 / 2021}});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(footpaths_before_and_after_journey, results_str_as(results, tt));
++}
++
++mem_dir two_dest_segments_reached_files() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++S3,S3,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R3,R3,"S0 -> S3 -> S1 -> S2",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_MON,R0_MON,1
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_MON,04:30:00,04:30:00,S0,0,0,0
++R0_MON,04:35:00,04:35:00,S3,1,0,0
++R0_MON,04:40:00,04:40:00,S1,2,0,0
++R0_MON,04:45:00,04:45:00,S2,3,0,0
++
++# transfers.txt
++from_stop_id,to_stop_id,transfer_type,min_transfer_time
++S3,S2,2,900
++)");
++}
++
++constexpr auto const two_dest_segments_reached_journey = R"(
++[2021-03-02 00:00, 2021-03-02 04:45]
++TRANSFERS: 0
++     FROM: (S0, S0) [2021-03-02 04:30]
++       TO: (S2, S2) [2021-03-02 04:45]
++leg 0: (S0, S0) [2021-03-02 04:30] -> (S2, S2) [2021-03-02 04:45]
++   0: S0      S0..............................................                               d: 02.03 04:30 [02.03 04:30]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
++   1: S3      S3.............................................. a: 02.03 04:35 [02.03 04:35]  d: 02.03 04:35 [02.03 04:35]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
++   2: S1      S1.............................................. a: 02.03 04:40 [02.03 04:40]  d: 02.03 04:40 [02.03 04:40]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
++   3: S2      S2.............................................. a: 02.03 04:45 [02.03 04:45]
++leg 1: (S2, S2) [2021-03-02 04:45] -> (S2, S2) [2021-03-02 04:45]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, two_dest_segments_reached) {
++  auto const tt = load_gtfs(two_dest_segments_reached_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(tt, tbd, "S0", "S2",
++                                     unixtime_t{sys_days{March / 02 / 2021}});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(two_dest_segments_reached_journey, results_str_as(results, tt));
++}
++
++mem_dir midnight_cross_files() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++S3,S3,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R3,R3,"S0 -> S3 -> S1 -> S2",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_TUE,R0_TUE,1
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_TUE,23:00:00,23:00:00,S0,0,0,0
++R0_TUE,23:30:00,23:30:00,S3,1,0,0
++R0_TUE,24:00:00,24:00:00,S1,2,0,0
++R0_TUE,25:00:00,25:00:00,S2,3,0,0
++)");
++}
++
++constexpr auto const midnight_cross_journey = R"(
++[2021-03-02 11:00, 2021-03-03 01:00]
++TRANSFERS: 0
++     FROM: (S0, S0) [2021-03-02 23:00]
++       TO: (S2, S2) [2021-03-03 01:00]
++leg 0: (S0, S0) [2021-03-02 23:00] -> (S2, S2) [2021-03-03 01:00]
++   0: S0      S0..............................................                               d: 02.03 23:00 [02.03 23:00]  [{name=R3, day=2021-03-02, id=R0_TUE, src=0}]
++   1: S3      S3.............................................. a: 02.03 23:30 [02.03 23:30]  d: 02.03 23:30 [02.03 23:30]  [{name=R3, day=2021-03-02, id=R0_TUE, src=0}]
++   2: S1      S1.............................................. a: 03.03 00:00 [03.03 00:00]  d: 03.03 00:00 [03.03 00:00]  [{name=R3, day=2021-03-02, id=R0_TUE, src=0}]
++   3: S2      S2.............................................. a: 03.03 01:00 [03.03 01:00]
++leg 1: (S2, S2) [2021-03-03 01:00] -> (S2, S2) [2021-03-03 01:00]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, midnight_cross) {
++  auto const tt = load_gtfs(midnight_cross_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(
++      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}} + 11_hours);
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(midnight_cross_journey, results_str_as(results, tt));
++}
++
++mem_dir same_day_transfer_files_as() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R0,R0,"S0 -> S1",2
++R1,DTA,R1,R1,"S1 -> S2",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_TUE,R0_TUE,1
++R1,TUE,R1_TUE,R1_TUE,2
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_TUE,00:00:00,00:00:00,S0,0,0,0
++R0_TUE,06:00:00,06:00:00,S1,1,0,0
++R1_TUE,12:00:00,12:00:00,S1,0,0,0
++R1_TUE,13:00:00,13:00:00,S2,1,0,0
++)");
++}
++
++constexpr auto const same_day_transfer_journey = R"(
++[2021-03-02 00:00, 2021-03-02 13:00]
++TRANSFERS: 1
++     FROM: (S0, S0) [2021-03-02 00:00]
++       TO: (S2, S2) [2021-03-02 13:00]
++leg 0: (S0, S0) [2021-03-02 00:00] -> (S1, S1) [2021-03-02 06:00]
++   0: S0      S0..............................................                               d: 02.03 00:00 [02.03 00:00]  [{name=R0, day=2021-03-02, id=R0_TUE, src=0}]
++   1: S1      S1.............................................. a: 02.03 06:00 [02.03 06:00]
++leg 1: (S1, S1) [2021-03-02 06:00] -> (S1, S1) [2021-03-02 06:02]
++  FOOTPATH (duration=2)
++leg 2: (S1, S1) [2021-03-02 12:00] -> (S2, S2) [2021-03-02 13:00]
++   0: S1      S1..............................................                               d: 02.03 12:00 [02.03 12:00]  [{name=R1, day=2021-03-02, id=R1_TUE, src=0}]
++   1: S2      S2.............................................. a: 02.03 13:00 [02.03 13:00]
++leg 3: (S2, S2) [2021-03-02 13:00] -> (S2, S2) [2021-03-02 13:00]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, same_day_transfer) {
++  auto const tt = load_gtfs(same_day_transfer_files_as);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(tt, tbd, "S0", "S2",
++                                     unixtime_t{sys_days{March / 02 / 2021}});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(same_day_transfer_journey, results_str_as(results, tt));
++}
++
++mem_dir next_day_transfer_files_as() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++WED,0,0,1,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R0,R0,"S0 -> S1",2
++R1,DTA,R1,R1,"S1 -> S2",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_TUE,R0_TUE,1
++R1,WED,R1_WED,R1_WED,2
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_TUE,12:00:00,12:00:00,S0,0,0,0
++R0_TUE,23:00:00,23:00:00,S1,1,0,0
++R1_WED,06:00:00,06:00:00,S1,0,0,0
++R1_WED,08:00:00,08:00:00,S2,1,0,0
++)");
++}
++
++constexpr auto const next_day_transfer_journey = R"(
++[2021-03-02 11:00, 2021-03-03 08:00]
++TRANSFERS: 1
++     FROM: (S0, S0) [2021-03-02 12:00]
++       TO: (S2, S2) [2021-03-03 08:00]
++leg 0: (S0, S0) [2021-03-02 12:00] -> (S1, S1) [2021-03-02 23:00]
++   0: S0      S0..............................................                               d: 02.03 12:00 [02.03 12:00]  [{name=R0, day=2021-03-02, id=R0_TUE, src=0}]
++   1: S1      S1.............................................. a: 02.03 23:00 [02.03 23:00]
++leg 1: (S1, S1) [2021-03-02 23:00] -> (S1, S1) [2021-03-02 23:02]
++  FOOTPATH (duration=2)
++leg 2: (S1, S1) [2021-03-03 06:00] -> (S2, S2) [2021-03-03 08:00]
++   0: S1      S1..............................................                               d: 03.03 06:00 [03.03 06:00]  [{name=R1, day=2021-03-03, id=R1_WED, src=0}]
++   1: S2      S2.............................................. a: 03.03 08:00 [03.03 08:00]
++leg 3: (S2, S2) [2021-03-03 08:00] -> (S2, S2) [2021-03-03 08:00]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, next_day_transfer) {
++  auto const tt = load_gtfs(next_day_transfer_files_as);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(
++      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(next_day_transfer_journey, results_str_as(results, tt));
++}
++mem_dir transfer_to_journey_from_previous_day_files() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++S3,S3,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++MON,1,0,0,0,0,0,0,20210301,20210307
++TUE,0,1,0,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R0,R0,"S0 -> S1",2
++R1,DTA,R1,R1,"S3 -> S1 -> S2",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,MON,R0_MON,R0_MON,1
++R1,TUE,R1_TUE,R1_TUE,2
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_MON,22:00:00,22:00:00,S3,0,0,0
++R0_MON,30:00:00,30:00:00,S1,1,0,0
++R0_MON,31:00:00,31:00:00,S2,2,0,0
++R1_TUE,02:00:00,02:00:00,S0,0,0,0
++R1_TUE,03:00:00,03:00:00,S1,1,0,0
++)");
++}
++
++constexpr auto const transfer_to_journey_from_previous_day_journey = R"(
++[2021-03-02 01:00, 2021-03-02 07:00]
++TRANSFERS: 1
++     FROM: (S0, S0) [2021-03-02 02:00]
++       TO: (S2, S2) [2021-03-02 07:00]
++leg 0: (S0, S0) [2021-03-02 02:00] -> (S1, S1) [2021-03-02 03:00]
++   0: S0      S0..............................................                               d: 02.03 02:00 [02.03 02:00]  [{name=R1, day=2021-03-02, id=R1_TUE, src=0}]
++   1: S1      S1.............................................. a: 02.03 03:00 [02.03 03:00]
++leg 1: (S1, S1) [2021-03-02 03:00] -> (S1, S1) [2021-03-02 03:02]
++  FOOTPATH (duration=2)
++leg 2: (S1, S1) [2021-03-02 06:00] -> (S2, S2) [2021-03-02 07:00]
++   1: S1      S1..............................................                               d: 02.03 06:00 [02.03 06:00]  [{name=R0, day=2021-03-01, id=R0_MON, src=0}]
++   2: S2      S2.............................................. a: 02.03 07:00 [02.03 07:00]
++leg 3: (S2, S2) [2021-03-02 07:00] -> (S2, S2) [2021-03-02 07:00]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, transfer_to_journey_from_previous_day) {
++  auto const tt = load_gtfs(transfer_to_journey_from_previous_day_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(
++      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 1_hours});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(transfer_to_journey_from_previous_day_journey,
++            results_str_as(results, tt));
++}
++
++mem_dir transfer_on_next_day_files_as() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++WED,0,0,1,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R0,R0,"S0 -> S1",2
++R1,DTA,R1,R1,"S1 -> S2",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_TUE,R0_TUE,1
++R1,WED,R1_WED,R1_WED,2
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_TUE,12:00:00,12:00:00,S0,0,0,0
++R0_TUE,25:00:00,25:00:00,S1,1,0,0
++R1_WED,06:00:00,06:00:00,S1,0,0,0
++R1_WED,08:00:00,08:00:00,S2,1,0,0
++)");
++}
++
++constexpr auto const transfer_on_next_day_journey = R"(
++[2021-03-02 11:00, 2021-03-03 08:00]
++TRANSFERS: 1
++     FROM: (S0, S0) [2021-03-02 12:00]
++       TO: (S2, S2) [2021-03-03 08:00]
++leg 0: (S0, S0) [2021-03-02 12:00] -> (S1, S1) [2021-03-03 01:00]
++   0: S0      S0..............................................                               d: 02.03 12:00 [02.03 12:00]  [{name=R0, day=2021-03-02, id=R0_TUE, src=0}]
++   1: S1      S1.............................................. a: 03.03 01:00 [03.03 01:00]
++leg 1: (S1, S1) [2021-03-03 01:00] -> (S1, S1) [2021-03-03 01:02]
++  FOOTPATH (duration=2)
++leg 2: (S1, S1) [2021-03-03 06:00] -> (S2, S2) [2021-03-03 08:00]
++   0: S1      S1..............................................                               d: 03.03 06:00 [03.03 06:00]  [{name=R1, day=2021-03-03, id=R1_WED, src=0}]
++   1: S2      S2.............................................. a: 03.03 08:00 [03.03 08:00]
++leg 3: (S2, S2) [2021-03-03 08:00] -> (S2, S2) [2021-03-03 08:00]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, transfer_on_next_day) {
++  auto const tt = load_gtfs(transfer_on_next_day_files_as);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(
++      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(transfer_on_next_day_journey, results_str_as(results, tt));
++}
++
++mem_dir transfer_on_next_day_follow_up_files_as() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++S3,S3,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++WED,0,0,1,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R0,R0,"S0 -> S1",2
++R1,DTA,R1,R1,"S1 -> S2",2
++R2,DTA,R2,R2,"S2 -> S3",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_TUE,R0_TUE,1
++R1,WED,R1_WED,R1_WED,2
++R2,WED,R2_WED,R2_WED,3
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_TUE,12:00:00,12:00:00,S0,0,0,0
++R0_TUE,25:00:00,25:00:00,S1,1,0,0
++R1_WED,06:00:00,06:00:00,S1,0,0,0
++R1_WED,08:00:00,08:00:00,S2,1,0,0
++R2_WED,08:30:00,08:30:00,S2,0,0,0
++R2_WED,09:00:00,09:00:00,S3,1,0,0
++)");
++}
++
++constexpr auto const transfer_on_next_day_follow_up_journey = R"(
++[2021-03-02 11:00, 2021-03-03 09:00]
++TRANSFERS: 2
++     FROM: (S0, S0) [2021-03-02 12:00]
++       TO: (S3, S3) [2021-03-03 09:00]
++leg 0: (S0, S0) [2021-03-02 12:00] -> (S1, S1) [2021-03-03 01:00]
++   0: S0      S0..............................................                               d: 02.03 12:00 [02.03 12:00]  [{name=R0, day=2021-03-02, id=R0_TUE, src=0}]
++   1: S1      S1.............................................. a: 03.03 01:00 [03.03 01:00]
++leg 1: (S1, S1) [2021-03-03 01:00] -> (S1, S1) [2021-03-03 01:02]
++  FOOTPATH (duration=2)
++leg 2: (S1, S1) [2021-03-03 06:00] -> (S2, S2) [2021-03-03 08:00]
++   0: S1      S1..............................................                               d: 03.03 06:00 [03.03 06:00]  [{name=R1, day=2021-03-03, id=R1_WED, src=0}]
++   1: S2      S2.............................................. a: 03.03 08:00 [03.03 08:00]
++leg 3: (S2, S2) [2021-03-03 08:00] -> (S2, S2) [2021-03-03 08:02]
++  FOOTPATH (duration=2)
++leg 4: (S2, S2) [2021-03-03 08:30] -> (S3, S3) [2021-03-03 09:00]
++   0: S2      S2..............................................                               d: 03.03 08:30 [03.03 08:30]  [{name=R2, day=2021-03-03, id=R2_WED, src=0}]
++   1: S3      S3.............................................. a: 03.03 09:00 [03.03 09:00]
++leg 5: (S3, S3) [2021-03-03 09:00] -> (S3, S3) [2021-03-03 09:00]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, transfer_on_next_day_follow_up) {
++  auto const tt = load_gtfs(transfer_on_next_day_follow_up_files_as);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(
++      tt, tbd, "S0", "S3", unixtime_t{sys_days{March / 02 / 2021} + 11_hours});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(transfer_on_next_day_follow_up_journey,
++            results_str_as(results, tt));
++}
++
++mem_dir transfer_not_active_files() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++ALL,1,1,1,1,1,1,1,20210301,20210307
++WED,0,0,1,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R0,R0,"S0 -> S1",2
++R1,DTA,R1,R1,"S0 -> S2",2
++R2,DTA,R2,R2,"S1 -> S2",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,ALL,R0_ALL,R0_ALL,1
++R1,ALL,R1_ALL,R1_ALL,2
++R2,WED,R2_WED,R2_WED,3
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_ALL,02:00:00,02:00:00,S0,0,0,0
++R0_ALL,03:00:00,03:00:00,S1,1,0,0
++R1_ALL,06:00:00,06:00:00,S0,0,0,0
++R1_ALL,08:00:00,08:00:00,S2,1,0,0
++R2_WED,03:30:00,03:30:00,S1,0,0,0
++R2_WED,04:00:00,04:00:00,S2,1,0,0
++)");
++}
++
++constexpr auto const transfer_not_active_journey = R"(
++[2021-03-02 00:00, 2021-03-02 08:00]
++TRANSFERS: 0
++     FROM: (S0, S0) [2021-03-02 06:00]
++       TO: (S2, S2) [2021-03-02 08:00]
++leg 0: (S0, S0) [2021-03-02 06:00] -> (S2, S2) [2021-03-02 08:00]
++   0: S0      S0..............................................                               d: 02.03 06:00 [02.03 06:00]  [{name=R1, day=2021-03-02, id=R1_ALL, src=0}]
++   1: S2      S2.............................................. a: 02.03 08:00 [02.03 08:00]
++leg 1: (S2, S2) [2021-03-02 08:00] -> (S2, S2) [2021-03-02 08:00]
++  FOOTPATH (duration=0)
++
++)";
++
++TEST(a_star, transfer_not_active) {
++  auto const tt = load_gtfs(transfer_not_active_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(tt, tbd, "S0", "S2",
++                                     unixtime_t{sys_days{March / 02 / 2021}});
++  EXPECT_EQ(results.size(), 1U);
++  EXPECT_EQ(transfer_not_active_journey, results_str_as(results, tt));
++}
++
++mem_dir too_many_transfers_files() {
++  return mem_dir::read(R"(
++# agency.txt
++agency_id,agency_name,agency_url,agency_timezone
++DTA,Demo Transit Authority,,Europe/London
++
++# stops.txt
++stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
++S0,S0,,,,,,
++S1,S1,,,,,,
++S2,S2,,,,,,
++S3,S3,,,,,,
++S4,S4,,,,,,
++S5,S5,,,,,,
++S6,S6,,,,,,
++S7,S7,,,,,,
++S8,S8,,,,,,
++S9,S9,,,,,,
++S10,S10,,,,,,
++
++# calendar.txt
++service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
++TUE,0,1,0,0,0,0,0,20210301,20210307
++
++# routes.txt
++route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
++R0,DTA,R0,R0,"S0 -> S1",2
++R1,DTA,R1,R1,"S1 -> S2",2
++R2,DTA,R2,R2,"S2 -> S3",2
++R3,DTA,R3,R3,"S3 -> S4",2
++R4,DTA,R4,R4,"S4 -> S5",2
++R5,DTA,R5,R5,"S5 -> S6",2
++R6,DTA,R6,R6,"S6 -> S7",2
++R7,DTA,R7,R7,"S7 -> S8",2
++R8,DTA,R8,R8,"S8 -> S9",2
++R9,DTA,R9,R9,"S9 -> S10",2
++
++# trips.txt
++route_id,service_id,trip_id,trip_headsign,block_id
++R0,TUE,R0_TUE,R0_TUE,1
++R1,TUE,R1_TUE,R1_TUE,2
++R2,TUE,R2_TUE,R2_TUE,3
++R3,TUE,R3_TUE,R3_TUE,4
++R4,TUE,R4_TUE,R4_TUE,5
++R5,TUE,R5_TUE,R5_TUE,6
++R6,TUE,R6_TUE,R6_TUE,7
++R7,TUE,R7_TUE,R7_TUE,8
++R8,TUE,R8_TUE,R8_TUE,9
++R9,TUE,R9_TUE,R9_TUE,10
++
++# stop_times.txt
++trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
++R0_TUE,01:00:00,01:00:00,S0,0,0,0
++R0_TUE,01:30:00,01:30:00,S1,1,0,0
++R1_TUE,02:00:00,02:00:00,S1,0,0,0
++R1_TUE,02:30:00,02:30:00,S2,1,0,0
++R2_TUE,03:00:00,03:00:00,S2,0,0,0
++R2_TUE,03:30:00,03:30:00,S3,1,0,0
++R3_TUE,04:00:00,04:00:00,S3,0,0,0
++R3_TUE,04:30:00,04:30:00,S4,1,0,0
++R4_TUE,05:00:00,05:00:00,S4,0,0,0
++R4_TUE,05:30:00,05:30:00,S5,1,0,0
++R5_TUE,06:00:00,06:00:00,S5,0,0,0
++R5_TUE,06:30:00,06:30:00,S6,1,0,0
++R6_TUE,07:00:00,07:00:00,S6,0,0,0
++R6_TUE,07:30:00,07:30:00,S7,1,0,0
++R7_TUE,08:00:00,08:00:00,S7,0,0,0
++R7_TUE,08:30:00,08:30:00,S8,1,0,0
++R8_TUE,09:00:00,09:00:00,S8,0,0,0
++R8_TUE,09:30:00,09:30:00,S9,1,0,0
++R9_TUE,10:00:00,10:00:00,S9,0,0,0
++R9_TUE,10:30:00,10:30:00,S10,1,0,0
++)");
++}
++
++TEST(a_star, too_many_transfers) {
++  auto const tt = load_gtfs(too_many_transfers_files);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_search(tt, tbd, "S0", "S10",
++                                     unixtime_t{sys_days{March / 02 / 2021}});
++  EXPECT_EQ(results.size(), 0U);
++}
++
++constexpr auto const intermodal_abc_journey = R"(
++[2020-03-30 05:20, 2020-03-30 08:00]
++TRANSFERS: 1
++     FROM: (START, START) [2020-03-30 05:20]
++       TO: (END, END) [2020-03-30 08:00]
++leg 0: (START, START) [2020-03-30 05:20] -> (A, 0000001) [2020-03-30 05:30]
++  MUMO (id=99, duration=10)
++leg 1: (A, 0000001) [2020-03-30 05:30] -> (B, 0000002) [2020-03-30 06:30]
++   0: 0000001 A...............................................                               d: 30.03 05:30 [30.03 07:30]  [{name=RE 1337, day=2020-03-30, id=1337/0000001/330/0000002/390/, src=0}]
++   1: 0000002 B............................................... a: 30.03 06:30 [30.03 08:30]
++leg 2: (B, 0000002) [2020-03-30 06:30] -> (B, 0000002) [2020-03-30 06:32]
++  FOOTPATH (duration=2)
++leg 3: (B, 0000002) [2020-03-30 06:45] -> (C, 0000003) [2020-03-30 07:45]
++   0: 0000002 B...............................................                               d: 30.03 06:45 [30.03 08:45]  [{name=RE 7331, day=2020-03-30, id=7331/0000002/405/0000003/465/, src=0}]
++   1: 0000003 C............................................... a: 30.03 07:45 [30.03 09:45]
++leg 4: (C, 0000003) [2020-03-30 07:45] -> (END, END) [2020-03-30 08:00]
++  MUMO (id=77, duration=15)
++
++)";
++
++TEST(a_star, intermodal_abc) {
++  auto const tt = load_hrd(nigiri::test_data::hrd_timetable::files_abc);
++  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
++  auto const results = a_star_intermodal_search(
++      tt, tbd,
++      {{tt.locations_.location_id_to_idx_.at(
++            {.id_ = "0000001", .src_ = source_idx_t{0U}}),
++        10_minutes, 99U}},
++      {{tt.locations_.location_id_to_idx_.at(
++            {.id_ = "0000003", .src_ = source_idx_t{0U}}),
++        15_minutes, 77U}},
++      interval{unixtime_t{sys_days{March / 30 / 2020}} + 5_hours,
++               unixtime_t{sys_days{March / 30 / 2020}} + 6_hours});
++  EXPECT_EQ(std::string_view{intermodal_abc_journey},
++            results_str_as(results, tt));
++}
