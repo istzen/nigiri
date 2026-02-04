@@ -45,15 +45,21 @@ struct a_star_state {
     // * Debug asserts
     assert(arrival_day_.contains(qe.segment_));
     assert(arrival_time_.contains(qe.segment_));
-    auto const val =
-        cost_function(to_idx(arrival_day_.at(qe.segment_)),
-                      arrival_time_.at(qe.segment_).count(), qe.transfers_);
+    auto const val = cost_function(
+        to_idx(arrival_day_.at(qe.segment_)),
+        use_lower_bounds_
+            ? lb_.at(qe.segment_) + arrival_time_.at(qe.segment_).count()
+            : arrival_time_.at(qe.segment_).count(),
+        qe.transfers_);
     as_debug("Cost function for segment {}: {}", qe.segment_, val);
     return val;
   }
 
-  // Cost function used when a new arrival time is computed
-  uint16_t cost_function(queue_entry const& qe, delta const arr) const {
+  // Cost function used when a bucket is computed
+  uint16_t cost_function(queue_entry const& qe, delta arr) const {
+    if (use_lower_bounds_) {
+      arr.mam_ += lb_.at(qe.segment_);
+    }
     return cost_function(arr.days(), arr.mam(), qe.transfers_);
   }
 
@@ -124,6 +130,8 @@ struct a_star_state {
   uint16_t start_day_ = std::numeric_limits<uint16_t>::max();
   uint16_t start_time_ = std::numeric_limits<uint16_t>::max();
   hash_map<transport_idx_t, day_idx_t> transport_day_offset_;
+  hash_map<segment_idx_t, u_int16_t> lb_;
+  bool use_lower_bounds_ = false;
 
 private:
   // Refactored part of cost function

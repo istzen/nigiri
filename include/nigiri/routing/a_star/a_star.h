@@ -18,6 +18,7 @@ using segment_idx_t = tb::segment_idx_t;
 struct a_star_stats {
   std::map<std::string, std::uint64_t> to_map() const {
     return {
+        {"use_lower_bounds", use_lower_bounds_},
         {"n_segments_reached", n_segments_reached_},
         {"n_dest_segments_reached", n_dest_segments_reached_},
         {"max_transfers_reached", max_transfers_reached_},
@@ -28,15 +29,17 @@ struct a_star_stats {
 
   std::uint64_t n_segments_reached_{0ULL};
   std::uint64_t n_dest_segments_reached_{0ULL};
+  bool use_lower_bounds_{false};
   bool max_transfers_reached_{false};
   bool max_travel_time_reached_{false};
   bool no_journey_found_{false};
 };
 
+template <bool UseLowerBounds>
 struct a_star {
   using algo_state_t = a_star_state;
   using algo_stats_t = a_star_stats;
-  static constexpr bool kUseLowerBounds = false;
+  static constexpr bool kUseLowerBounds = UseLowerBounds;
 
   static constexpr auto const kUnreachable =
       std::numeric_limits<std::uint16_t>::max();

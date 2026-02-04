@@ -54,18 +54,20 @@ std::string results_str_as(auto const& results, timetable const& tt) {
   return ss.str();
 }
 
+template <bool UseLowerBounds = false>
 pareto_set<routing::journey> a_star_search(timetable const& tt,
                                            tb_data const& tbd,
                                            routing::query q) {
   static auto search_state = routing::search_state{};
   auto algo_state = a_star_state{tbd};
 
-  return *(routing::search<direction::kForward, a_star>{
+  return *(routing::search<direction::kForward, a_star<UseLowerBounds>>{
       tt, nullptr, search_state, algo_state, std::move(q)}
                .execute()
                .journeys_);
 }
 
+template <bool UseLowerBounds = false>
 pareto_set<routing::journey> a_star_search(timetable const& tt,
                                            tb_data const& tbd,
                                            std::string_view from,
@@ -80,7 +82,7 @@ pareto_set<routing::journey> a_star_search(timetable const& tt,
                         0_minutes, 0U}},
       .use_start_footpaths_ = true,
       .max_transfers_ = 8};
-  return a_star_search(tt, tbd, std::move(q));
+  return a_star_search<UseLowerBounds>(tt, tbd, std::move(q));
 }
 
 pareto_set<routing::journey> a_star_intermodal_search(
@@ -228,6 +230,15 @@ TEST(a_star, multiple_segment_run) {
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
   auto const results = a_star_search(tt, tbd, "S0", "S2",
                                      unixtime_t{sys_days{March / 02 / 2021}});
+  EXPECT_EQ(results.size(), 1U);
+  EXPECT_EQ(multiple_segment_run_journey, results_str_as(results, tt));
+}
+
+TEST(a_star, lower_bounds_multiple_segment_run) {
+  auto const tt = load_gtfs(multiple_segment_run_files);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_search<true>(
+      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(multiple_segment_run_journey, results_str_as(results, tt));
 }

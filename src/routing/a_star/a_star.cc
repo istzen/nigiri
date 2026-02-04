@@ -16,33 +16,37 @@
 #include "nigiri/timetable.h"
 #include "nigiri/types.h"
 
-// #define as_debug fmt::println
-#define as_debug(...)
+#define as_debug fmt::println
+// #define as_debug(...)
 
 namespace nigiri {
 namespace routing {
 
-a_star::a_star(timetable const& tt,
-               rt_timetable const*,
-               a_star_state& state,
-               bitvec const& is_dest,
-               std::array<bitvec, kMaxVias> const&,
-               std::vector<std::uint16_t> const& dist_to_dest,
-               hash_map<location_idx_t, std::vector<td_offset>> const&,
-               std::vector<std::uint16_t> const& lb,
-               std::vector<via_stop> const&,
-               day_idx_t base,
-               clasz_mask_t,
-               bool,
-               bool,
-               bool,
-               transfer_time_settings tts)
+template <bool UseLowerBounds>
+a_star<UseLowerBounds>::a_star(
+    timetable const& tt,
+    rt_timetable const*,
+    a_star_state& state,
+    bitvec const& is_dest,
+    std::array<bitvec, kMaxVias> const&,
+    std::vector<std::uint16_t> const& dist_to_dest,
+    hash_map<location_idx_t, std::vector<td_offset>> const&,
+    std::vector<std::uint16_t> const& lb,
+    std::vector<via_stop> const&,
+    day_idx_t base,
+    clasz_mask_t,
+    bool,
+    bool,
+    bool,
+    transfer_time_settings tts)
     : tt_{tt},
       state_{state},
       is_dest_{is_dest},
       dist_to_dest_{dist_to_dest},
       lb_{lb},
       base_{base - QUERY_DAY_SHIFT} {
+  stats_.use_lower_bounds_ = UseLowerBounds;
+  state_.use_lower_bounds_ = UseLowerBounds;
   state_.transfer_factor_ = tts.factor_;
 
   auto const mark_dest_segments = [&](location_idx_t const l,
@@ -91,11 +95,12 @@ a_star::a_star(timetable const& tt,
   }
 };
 
-void a_star::execute(unixtime_t const start_time,
-                     std::uint8_t const max_transfers,
-                     unixtime_t const worst_time_at_dest,
-                     profile_idx_t const,
-                     pareto_set<journey>& results) {
+template <bool UseLowerBounds>
+void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
+                                     std::uint8_t const max_transfers,
+                                     unixtime_t const worst_time_at_dest,
+                                     profile_idx_t const,
+                                     pareto_set<journey>& results) {
   auto const start_delta = day_idx_mam(start_time);
   state_.setup(start_delta);
   delta const worst_delta =
@@ -154,6 +159,12 @@ void a_star::execute(unixtime_t const start_time,
           to_idx(s - state_.tbd_.transport_first_segment_[t]) + 1);
       auto const next_stop_arr = event_day_idx_mam(t, to, event_type::kArr);
       if (next_stop_arr.count() < worst_delta.count()) {
+        if constexpr (UseLowerBounds) {
+          state_.lb_.emplace(
+              s, lb_.at(to_idx(
+                     stop{tt_.route_location_seq_[tt_.transport_route_[t]][to]}
+                         .location_idx())));
+        }
         state_.update_segment(
             s, next_stop_arr, segment,
             transfer ? current.transfers_ + 1 : current.transfers_);
@@ -204,7 +215,8 @@ void a_star::execute(unixtime_t const start_time,
   stats_.no_journey_found_ = results.empty();
 }
 
-void a_star::add_start(location_idx_t l, unixtime_t t) {
+template <bool UseLowerBounds>
+void a_star<UseLowerBounds>::add_start(location_idx_t l, unixtime_t t) {
   auto const [day, mam] = tt_.day_idx_mam(t);
   for (auto const r : tt_.location_routes_[l]) {
     auto const stop_seq = tt_.route_location_seq_[r];
@@ -236,11 +248,18 @@ void a_star::add_start(location_idx_t l, unixtime_t t) {
       as_debug("Adding start segment {} for location {}", start_segment,
                location{tt_, l});
       state_.transport_day_offset_.emplace(et.t_idx_, et.day_ - base_);
+      if constexpr (UseLowerBounds) {
+        state_.lb_.emplace(
+            start_segment,
+            lb_.at(to_idx(
+                stop{tt_.route_location_seq_[r][i + 1]}.location_idx())));
+      }
     }
   }
 }
 
-void a_star::reconstruct(query const& q, journey& j) const {
+template <bool UseLowerBounds>
+void a_star<UseLowerBounds>::reconstruct(query const& q, journey& j) const {
   UTL_FINALLY([&]() { std::reverse(begin(j.legs_), end(j.legs_)); });
 
   auto const has_offset = [&](std::vector<offset> const& offsets,
@@ -448,6 +467,11 @@ void a_star::reconstruct(query const& q, journey& j) const {
     }
   }
 }
+
+// Explicit template instantiations so the methods are emitted for both
+// UseLowerBounds=false and UseLowerBounds=true (linker needs these symbols).
+template struct a_star<false>;
+template struct a_star<true>;
 
 }  // namespace routing
 }  // namespace nigiri
