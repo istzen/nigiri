@@ -102,7 +102,11 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
                                      profile_idx_t const,
                                      pareto_set<journey>& results) {
   auto const start_delta = day_idx_mam(start_time);
-  state_.setup(start_delta);
+  // TODO: this could be done with worst_delta included as that would limit the
+  // size of the buckets as well
+  state_.setup(start_delta, max_transfers);
+  // TODO: think about this comparison as the min should not work proberly since
+  // the delta < operator works weird
   delta const worst_delta =
       std::min(day_idx_mam(worst_time_at_dest),
                delta(maxASTravelTime.count() + start_delta.count()));
@@ -111,7 +115,7 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
   while (!state_.pq_.empty()) {
     auto const& current = state_.pq_.top();
 
-    if (state_.cost_function(current) > current_best_arrival) {
+    if (state_.cost_function(current) >= current_best_arrival) {
       return;
     }
     state_.pq_.pop();
@@ -121,13 +125,13 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
       continue;
     }
     state_.settled_segments_.set(segment, true);
-    stats_.n_segments_reached_++;
+    ++stats_.n_segments_reached_;
 
     as_debug("Visiting segment {} with transfers {}", segment,
              current.transfers_);
 
     if (state_.end_reachable_.test(segment)) {
-      stats_.n_dest_segments_reached_++;
+      ++stats_.n_dest_segments_reached_;
       auto bucket = state_.cost_function(current);
       auto const it = state_.dist_to_dest_.find(segment);
       if (it != end(state_.dist_to_dest_)) {
@@ -169,8 +173,9 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
             s, next_stop_arr, segment,
             transfer ? current.transfers_ + 1 : current.transfers_);
       } else {
-        as_debug("Next segment {} arrival time {} exceeds worst arrival {}", s,
-                 next_stop_arr, worst_delta);
+        as_debug(
+            "Next segment {} arrival time {} exceeds worst arrival time {}", s,
+            next_stop_arr, worst_delta);
         stats_.max_travel_time_reached_ = true;
       }
     };

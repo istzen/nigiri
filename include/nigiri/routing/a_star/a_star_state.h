@@ -29,7 +29,7 @@ struct a_star_state {
       segment_idx_t::invalid();
 
   a_star_state(tb_data const& tbd)
-      : tbd_{tbd}, pq_{maxASTravelTime.count(), get_bucket_a_star(*this)} {
+      : tbd_{tbd}, pq_{0, get_bucket_a_star{*this}} {
     end_reachable_.resize(tbd.segment_transfers_.size());
     settled_segments_.resize(tbd.segment_transfers_.size());
     start_segments_.resize(tbd.segment_transfers_.size());
@@ -77,12 +77,14 @@ struct a_star_state {
     }
   };
 
-  void setup(delta const start_delta) {
+  void setup(delta const start_delta, uint8_t max_transfers) {
     assert(start_time_ == std::numeric_limits<uint16_t>::max() &&
            start_day_ == std::numeric_limits<uint16_t>::max() &&
            "state has not been proberly reset before setup");
     start_time_ = start_delta.mam();
     start_day_ = start_delta.days();
+    pq_.n_buckets(maxASTravelTime.count() +
+                  std::ceil(max_transfers * transfer_factor_));
     start_segments_.for_each_set_bit([&](segment_idx_t const s) {
       if (cost_function(queue_entry{s, 0}) > pq_.n_buckets()) [[unlikely]] {
         as_debug("Skipping start segment {} as its cost is too high", s);

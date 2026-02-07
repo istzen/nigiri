@@ -54,7 +54,7 @@ std::string results_str_as(auto const& results, timetable const& tt) {
   return ss.str();
 }
 
-template <bool UseLowerBounds = false>
+template <bool UseLowerBounds = true>
 pareto_set<routing::journey> a_star_search(timetable const& tt,
                                            tb_data const& tbd,
                                            routing::query q) {
@@ -67,7 +67,7 @@ pareto_set<routing::journey> a_star_search(timetable const& tt,
                .journeys_);
 }
 
-template <bool UseLowerBounds = false>
+template <bool UseLowerBounds = true>
 pareto_set<routing::journey> a_star_search(timetable const& tt,
                                            tb_data const& tbd,
                                            std::string_view from,
