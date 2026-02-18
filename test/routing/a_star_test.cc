@@ -90,12 +90,12 @@ pareto_set<routing::journey> a_star_intermodal_search(
     tb::tb_data const& tbd,
     std::vector<routing::offset> start,
     std::vector<routing::offset> destination,
-    interval<unixtime_t> interval,
+    routing::start_time_t const time,
     std::uint8_t const min_connection_count = 0U,
     bool const extend_interval_earlier = false,
     bool const extend_interval_later = false) {
   auto q = routing::query{
-      .start_time_ = interval,
+      .start_time_ = time,
       .start_match_mode_ = routing::location_match_mode::kIntermodal,
       .dest_match_mode_ = routing::location_match_mode::kIntermodal,
       .start_ = std::move(start),
@@ -156,7 +156,7 @@ R0B_TUE,06:00:00,06:00:00,S1,1,0,0
 }
 
 constexpr auto const one_run_journey = R"(
-[2021-03-02 00:00, 2021-03-02 07:00]
+[2021-03-02 05:31, 2021-03-02 07:00]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 05:31]
        TO: (S2, S2) [2021-03-02 07:00]
@@ -212,7 +212,7 @@ R0_MON,14:00:00,14:00:00,S2,3,0,0
 }
 
 constexpr auto const multiple_segment_run_journey = R"(
-[2021-03-02 00:00, 2021-03-02 14:00]
+[2021-03-02 04:30, 2021-03-02 14:00]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 04:30]
        TO: (S2, S2) [2021-03-02 14:00]
@@ -297,7 +297,7 @@ S3,S2,2,600
 }
 
 constexpr auto const footpaths_before_and_after_journey = R"(
-[2021-03-02 00:00, 2021-03-02 07:10]
+[2021-03-02 05:45, 2021-03-02 07:10]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 05:45]
        TO: (S2, S2) [2021-03-02 07:10]
@@ -359,7 +359,7 @@ S3,S2,2,900
 }
 
 constexpr auto const two_dest_segments_reached_journey = R"(
-[2021-03-02 00:00, 2021-03-02 04:45]
+[2021-03-02 04:30, 2021-03-02 04:45]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 04:30]
        TO: (S2, S2) [2021-03-02 04:45]
@@ -417,7 +417,7 @@ R0_TUE,25:00:00,25:00:00,S2,3,0,0
 }
 
 constexpr auto const midnight_cross_journey = R"(
-[2021-03-02 11:00, 2021-03-03 01:00]
+[2021-03-02 23:00, 2021-03-03 01:00]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 23:00]
        TO: (S2, S2) [2021-03-03 01:00]
@@ -539,7 +539,7 @@ R1_WED,08:00:00,08:00:00,S2,1,0,0
 }
 
 constexpr auto const next_day_transfer_journey = R"(
-[2021-03-02 11:00, 2021-03-03 08:00]
+[2021-03-02 12:00, 2021-03-03 08:00]
 TRANSFERS: 1
      FROM: (S0, S0) [2021-03-02 12:00]
        TO: (S2, S2) [2021-03-03 08:00]
@@ -603,7 +603,7 @@ R1_TUE,03:00:00,03:00:00,S1,1,0,0
 }
 
 constexpr auto const transfer_to_journey_from_previous_day_journey = R"(
-[2021-03-02 01:00, 2021-03-02 07:00]
+[2021-03-02 02:00, 2021-03-02 07:00]
 TRANSFERS: 1
      FROM: (S0, S0) [2021-03-02 02:00]
        TO: (S2, S2) [2021-03-02 07:00]
@@ -667,7 +667,7 @@ R1_WED,08:00:00,08:00:00,S2,1,0,0
 }
 
 constexpr auto const transfer_on_next_day_journey = R"(
-[2021-03-02 11:00, 2021-03-03 08:00]
+[2021-03-02 12:00, 2021-03-03 08:00]
 TRANSFERS: 1
      FROM: (S0, S0) [2021-03-02 12:00]
        TO: (S2, S2) [2021-03-03 08:00]
@@ -735,7 +735,7 @@ R2_WED,09:00:00,09:00:00,S3,1,0,0
 }
 
 constexpr auto const transfer_on_next_day_follow_up_journey = R"(
-[2021-03-02 11:00, 2021-03-03 09:00]
+[2021-03-02 12:00, 2021-03-03 09:00]
 TRANSFERS: 2
      FROM: (S0, S0) [2021-03-02 12:00]
        TO: (S3, S3) [2021-03-03 09:00]
@@ -808,7 +808,7 @@ R2_WED,04:00:00,04:00:00,S2,1,0,0
 }
 
 constexpr auto const transfer_not_active_journey = R"(
-[2021-03-02 00:00, 2021-03-02 08:00]
+[2021-03-02 06:00, 2021-03-02 08:00]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 06:00]
        TO: (S2, S2) [2021-03-02 08:00]
@@ -943,8 +943,70 @@ TEST(a_star, intermodal_abc) {
       {{tt.locations_.location_id_to_idx_.at(
             {.id_ = "0000003", .src_ = source_idx_t{0U}}),
         15_minutes, 77U}},
+      unixtime_t{sys_days{March / 30 / 2020} + 5_hours});
+  for (auto const& result : results) {
+    result.print(std::cout, tt);
+  }
+  EXPECT_EQ(results.size(), 1U);
+  EXPECT_EQ(std::string_view{intermodal_abc_journey},
+            results_str_as(results, tt));
+}
+
+constexpr auto const intermodal_abc_journeys = R"(
+[2020-03-30 05:20, 2020-03-30 08:00]
+TRANSFERS: 1
+     FROM: (START, START) [2020-03-30 05:20]
+       TO: (END, END) [2020-03-30 08:00]
+leg 0: (START, START) [2020-03-30 05:20] -> (A, 0000001) [2020-03-30 05:30]
+  MUMO (id=99, duration=10)
+leg 1: (A, 0000001) [2020-03-30 05:30] -> (B, 0000002) [2020-03-30 06:30]
+   0: 0000001 A...............................................                               d: 30.03 05:30 [30.03 07:30]  [{name=RE 1337, day=2020-03-30, id=1337/0000001/330/0000002/390/, src=0}]
+   1: 0000002 B............................................... a: 30.03 06:30 [30.03 08:30]
+leg 2: (B, 0000002) [2020-03-30 06:30] -> (B, 0000002) [2020-03-30 06:32]
+  FOOTPATH (duration=2)
+leg 3: (B, 0000002) [2020-03-30 06:45] -> (C, 0000003) [2020-03-30 07:45]
+   0: 0000002 B...............................................                               d: 30.03 06:45 [30.03 08:45]  [{name=RE 7331, day=2020-03-30, id=7331/0000002/405/0000003/465/, src=0}]
+   1: 0000003 C............................................... a: 30.03 07:45 [30.03 09:45]
+leg 4: (C, 0000003) [2020-03-30 07:45] -> (END, END) [2020-03-30 08:00]
+  MUMO (id=77, duration=15)
+
+
+[2020-03-30 05:50, 2020-03-30 08:30]
+TRANSFERS: 1
+     FROM: (START, START) [2020-03-30 05:50]
+       TO: (END, END) [2020-03-30 08:30]
+leg 0: (START, START) [2020-03-30 05:50] -> (A, 0000001) [2020-03-30 06:00]
+  MUMO (id=99, duration=10)
+leg 1: (A, 0000001) [2020-03-30 06:00] -> (B, 0000002) [2020-03-30 07:00]
+   0: 0000001 A...............................................                               d: 30.03 06:00 [30.03 08:00]  [{name=RE 1337, day=2020-03-30, id=1337/0000001/360/0000002/420/, src=0}]
+   1: 0000002 B............................................... a: 30.03 07:00 [30.03 09:00]
+leg 2: (B, 0000002) [2020-03-30 07:00] -> (B, 0000002) [2020-03-30 07:02]
+  FOOTPATH (duration=2)
+leg 3: (B, 0000002) [2020-03-30 07:15] -> (C, 0000003) [2020-03-30 08:15]
+   0: 0000002 B...............................................                               d: 30.03 07:15 [30.03 09:15]  [{name=RE 7331, day=2020-03-30, id=7331/0000002/435/0000003/495/, src=0}]
+   1: 0000003 C............................................... a: 30.03 08:15 [30.03 10:15]
+leg 4: (C, 0000003) [2020-03-30 08:15] -> (END, END) [2020-03-30 08:30]
+  MUMO (id=77, duration=15)
+
+)";
+
+TEST(a_star, intermodal_abc_interval_start_time) {
+  auto const tt = load_hrd(nigiri::test_data::hrd_timetable::files_abc);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_intermodal_search(
+      tt, tbd,
+      {{tt.locations_.location_id_to_idx_.at(
+            {.id_ = "0000001", .src_ = source_idx_t{0U}}),
+        10_minutes, 99U}},
+      {{tt.locations_.location_id_to_idx_.at(
+            {.id_ = "0000003", .src_ = source_idx_t{0U}}),
+        15_minutes, 77U}},
       interval{unixtime_t{sys_days{March / 30 / 2020}} + 5_hours,
                unixtime_t{sys_days{March / 30 / 2020}} + 6_hours});
-  EXPECT_EQ(std::string_view{intermodal_abc_journey},
+  for (auto const& result : results) {
+    result.print(std::cout, tt);
+  }
+  EXPECT_EQ(results.size(), 2U);
+  EXPECT_EQ(std::string_view{intermodal_abc_journeys},
             results_str_as(results, tt));
 }

@@ -101,6 +101,7 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
                                      unixtime_t const worst_time_at_dest,
                                      profile_idx_t const,
                                      pareto_set<journey>& results) {
+  auto const results_size_before = results.size();
   auto const start_delta = day_idx_mam(start_time);
   // TODO: this could be done with worst_delta included as that would limit the
   // size of the buckets as well
@@ -149,7 +150,9 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
       as_debug("Reached destination via segment {} at time: {}", segment,
                dest_time);
 
-      results.clear();
+      if (results.size() > results_size_before) {
+        results.erase(std::prev(results.end()));
+      }
       results.add(
           {.legs_{},
            .start_time_ = start_time,
@@ -471,6 +474,7 @@ void a_star<UseLowerBounds>::reconstruct(query const& q, journey& j) const {
       }
     }
   }
+  j.start_time_ = j.legs_.back().dep_time_;
 }
 
 // Explicit template instantiations so the methods are emitted for both
