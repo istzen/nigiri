@@ -103,8 +103,6 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
                                      pareto_set<journey>& results) {
   auto const results_size_before = results.size();
   auto const start_delta = day_idx_mam(start_time);
-  // TODO: this could be done with worst_delta included as that would limit the
-  // size of the buckets as well
   state_.setup(start_delta, max_transfers);
   // TODO: think about this comparison as the min should not work proberly since
   // the delta < operator works weird
@@ -474,7 +472,6 @@ void a_star<UseLowerBounds>::reconstruct(query const& q, journey& j) const {
       }
     }
   }
-  j.start_time_ = j.legs_.back().dep_time_;
 }
 
 // Explicit template instantiations so the methods are emitted for both

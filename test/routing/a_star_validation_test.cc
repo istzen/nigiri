@@ -39,24 +39,6 @@ timetable load_hrd(auto const& files) {
   return tt;
 }
 
-std::string result_str_as(auto const& result, timetable const& tt) {
-  std::stringstream ss;
-  ss << "\n";
-  result.print(ss, tt);
-  ss << "\n";
-  return ss.str();
-}
-
-std::string results_str_as(auto const& results, timetable const& tt) {
-  std::stringstream ss;
-  for (auto const& r : results) {
-    ss << "\n";
-    r.print(ss, tt);
-    ss << "\n";
-  }
-  return ss.str();
-}
-
 pareto_set<routing::journey> algo_search(timetable const& tt,
                                          tb_data const& tbd,
                                          routing::query q,
@@ -152,8 +134,6 @@ TEST(a_star_validation, pareto_files) {
       algo_search(tt, tbd, "S0", "S2", unixtime_t{sys_days{2021_y / March / 1}},
                   1.0F, false);
   for (auto i = 0U; i < result_without_transfer.size(); ++i) {
-    fmt::println("A*: {}", result_without_transfer.els_.at(i).arrival_time());
-    fmt::println("TB: {}", tb_results.els_.at(i).arrival_time());
     EXPECT_TRUE(result_without_transfer.els_.at(i) == tb_results.els_.at(i));
   }
 }

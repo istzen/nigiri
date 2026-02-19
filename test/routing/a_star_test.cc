@@ -5,7 +5,7 @@
 #include "nigiri/loader/hrd/load_timetable.h"
 #include "nigiri/loader/init_finish.h"
 #include "nigiri/routing/a_star/a_star.h"
-#include "nigiri/routing/search.h"
+#include "nigiri/routing/a_star/a_star_search.h"
 #include "nigiri/routing/tb/preprocess.h"
 #include "nigiri/routing/tb/tb_data.h"
 
@@ -36,14 +36,6 @@ timetable load_hrd(auto const& files) {
   return tt;
 }
 
-std::string result_str_as(auto const& result, timetable const& tt) {
-  std::stringstream ss;
-  ss << "\n";
-  result.print(ss, tt);
-  ss << "\n";
-  return ss.str();
-}
-
 std::string results_str_as(auto const& results, timetable const& tt) {
   std::stringstream ss;
   for (auto const& r : results) {
@@ -54,20 +46,16 @@ std::string results_str_as(auto const& results, timetable const& tt) {
   return ss.str();
 }
 
-template <bool UseLowerBounds = true>
 pareto_set<routing::journey> a_star_search(timetable const& tt,
                                            tb_data const& tbd,
                                            routing::query q) {
   static auto search_state = routing::search_state{};
   auto algo_state = a_star_state{tbd};
 
-  return *(routing::search<direction::kForward, a_star<UseLowerBounds>>{
-      tt, nullptr, search_state, algo_state, std::move(q)}
-               .execute()
+  return *(routing::a_star_search(tt, search_state, algo_state, std::move(q))
                .journeys_);
 }
 
-template <bool UseLowerBounds = true>
 pareto_set<routing::journey> a_star_search(timetable const& tt,
                                            tb_data const& tbd,
                                            std::string_view from,
@@ -82,7 +70,7 @@ pareto_set<routing::journey> a_star_search(timetable const& tt,
                         0_minutes, 0U}},
       .use_start_footpaths_ = true,
       .max_transfers_ = 8};
-  return a_star_search<UseLowerBounds>(tt, tbd, std::move(q));
+  return a_star_search(tt, tbd, std::move(q));
 }
 
 pareto_set<routing::journey> a_star_intermodal_search(
@@ -156,7 +144,7 @@ R0B_TUE,06:00:00,06:00:00,S1,1,0,0
 }
 
 constexpr auto const one_run_journey = R"(
-[2021-03-02 05:31, 2021-03-02 07:00]
+[2021-03-02 00:00, 2021-03-02 07:00]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 05:31]
        TO: (S2, S2) [2021-03-02 07:00]
@@ -212,7 +200,7 @@ R0_MON,14:00:00,14:00:00,S2,3,0,0
 }
 
 constexpr auto const multiple_segment_run_journey = R"(
-[2021-03-02 04:30, 2021-03-02 14:00]
+[2021-03-02 00:00, 2021-03-02 14:00]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 04:30]
        TO: (S2, S2) [2021-03-02 14:00]
@@ -237,8 +225,8 @@ TEST(a_star, multiple_segment_run) {
 TEST(a_star, lower_bounds_multiple_segment_run) {
   auto const tt = load_gtfs(multiple_segment_run_files);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  auto const results = a_star_search<true>(
-      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}});
+  auto const results = a_star_search(tt, tbd, "S0", "S2",
+                                     unixtime_t{sys_days{March / 02 / 2021}});
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(multiple_segment_run_journey, results_str_as(results, tt));
 }
@@ -297,7 +285,7 @@ S3,S2,2,600
 }
 
 constexpr auto const footpaths_before_and_after_journey = R"(
-[2021-03-02 05:45, 2021-03-02 07:10]
+[2021-03-02 00:00, 2021-03-02 07:10]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 05:45]
        TO: (S2, S2) [2021-03-02 07:10]
@@ -359,7 +347,7 @@ S3,S2,2,900
 }
 
 constexpr auto const two_dest_segments_reached_journey = R"(
-[2021-03-02 04:30, 2021-03-02 04:45]
+[2021-03-02 00:00, 2021-03-02 04:45]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 04:30]
        TO: (S2, S2) [2021-03-02 04:45]
@@ -417,7 +405,7 @@ R0_TUE,25:00:00,25:00:00,S2,3,0,0
 }
 
 constexpr auto const midnight_cross_journey = R"(
-[2021-03-02 23:00, 2021-03-03 01:00]
+[2021-03-02 20:00, 2021-03-03 01:00]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 23:00]
        TO: (S2, S2) [2021-03-03 01:00]
@@ -435,7 +423,7 @@ TEST(a_star, midnight_cross) {
   auto const tt = load_gtfs(midnight_cross_files);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
   auto const results = a_star_search(
-      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}} + 11_hours);
+      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}} + 20_hours);
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(midnight_cross_journey, results_str_as(results, tt));
 }
@@ -539,7 +527,7 @@ R1_WED,08:00:00,08:00:00,S2,1,0,0
 }
 
 constexpr auto const next_day_transfer_journey = R"(
-[2021-03-02 12:00, 2021-03-03 08:00]
+[2021-03-02 11:00, 2021-03-03 08:00]
 TRANSFERS: 1
      FROM: (S0, S0) [2021-03-02 12:00]
        TO: (S2, S2) [2021-03-03 08:00]
@@ -603,7 +591,7 @@ R1_TUE,03:00:00,03:00:00,S1,1,0,0
 }
 
 constexpr auto const transfer_to_journey_from_previous_day_journey = R"(
-[2021-03-02 02:00, 2021-03-02 07:00]
+[2021-03-02 01:00, 2021-03-02 07:00]
 TRANSFERS: 1
      FROM: (S0, S0) [2021-03-02 02:00]
        TO: (S2, S2) [2021-03-02 07:00]
@@ -667,7 +655,7 @@ R1_WED,08:00:00,08:00:00,S2,1,0,0
 }
 
 constexpr auto const transfer_on_next_day_journey = R"(
-[2021-03-02 12:00, 2021-03-03 08:00]
+[2021-03-02 11:00, 2021-03-03 08:00]
 TRANSFERS: 1
      FROM: (S0, S0) [2021-03-02 12:00]
        TO: (S2, S2) [2021-03-03 08:00]
@@ -735,7 +723,7 @@ R2_WED,09:00:00,09:00:00,S3,1,0,0
 }
 
 constexpr auto const transfer_on_next_day_follow_up_journey = R"(
-[2021-03-02 12:00, 2021-03-03 09:00]
+[2021-03-02 11:00, 2021-03-03 09:00]
 TRANSFERS: 2
      FROM: (S0, S0) [2021-03-02 12:00]
        TO: (S3, S3) [2021-03-03 09:00]
@@ -808,7 +796,7 @@ R2_WED,04:00:00,04:00:00,S2,1,0,0
 }
 
 constexpr auto const transfer_not_active_journey = R"(
-[2021-03-02 06:00, 2021-03-02 08:00]
+[2021-03-02 00:00, 2021-03-02 08:00]
 TRANSFERS: 0
      FROM: (S0, S0) [2021-03-02 06:00]
        TO: (S2, S2) [2021-03-02 08:00]
@@ -913,7 +901,7 @@ TEST(a_star, too_many_transfers) {
 }
 
 constexpr auto const intermodal_abc_journey = R"(
-[2020-03-30 05:20, 2020-03-30 08:00]
+[2020-03-30 05:00, 2020-03-30 08:00]
 TRANSFERS: 1
      FROM: (START, START) [2020-03-30 05:20]
        TO: (END, END) [2020-03-30 08:00]
