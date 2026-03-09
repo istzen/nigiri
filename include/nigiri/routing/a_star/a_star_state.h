@@ -5,8 +5,8 @@
 #include "nigiri/routing/tb/tb_data.h"
 #include "nigiri/types.h"
 
-#define as_debug fmt::println
-// #define as_debug(...)
+// #define as_debug fmt::println
+#define as_debug(...)
 
 namespace nigiri::routing {
 
@@ -37,7 +37,7 @@ struct a_star_state {
 
   bool better_arrival(queue_entry qe, delta const new_arr) {
     return !arrival_day_.contains(qe.segment_) ||
-           cost_function(qe, new_arr) > cost_function(qe);
+           cost_function(qe, new_arr) < cost_function(qe);
   }
 
   // Standard cost function used in pq
@@ -45,13 +45,15 @@ struct a_star_state {
     // * Debug asserts
     assert(arrival_day_.contains(qe.segment_));
     assert(arrival_time_.contains(qe.segment_));
+    if (use_lower_bounds_) {
+      assert(lb_.contains(qe.segment_));
+    }
     auto const val = cost_function(
         to_idx(arrival_day_.at(qe.segment_)),
         use_lower_bounds_
             ? lb_.at(qe.segment_) + arrival_time_.at(qe.segment_).count()
             : arrival_time_.at(qe.segment_).count(),
         qe.transfers_);
-    as_debug("Cost function for segment {}: {}", qe.segment_, val);
     return val;
   }
 
@@ -86,7 +88,7 @@ struct a_star_state {
     pq_.n_buckets(maxASTravelTime.count() +
                   std::ceil(max_transfers * transfer_factor_));
     start_segments_.for_each_set_bit([&](segment_idx_t const s) {
-      if (cost_function(queue_entry{s, 0}) > pq_.n_buckets()) [[unlikely]] {
+      if (cost_function(queue_entry{s, 0}) >= pq_.n_buckets()) {
         as_debug("Skipping start segment {} as its cost is too high", s);
         return;
       }

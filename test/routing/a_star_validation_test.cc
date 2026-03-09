@@ -80,6 +80,64 @@ pareto_set<routing::journey> algo_search(timetable const& tt,
   return algo_search(tt, tbd, std::move(q), is_a_star);
 }
 
+mem_dir simple_pareto_files() {
+  return mem_dir::read(R"(
+# agency.txt
+agency_id,agency_name,agency_url,agency_timezone
+DTA,Demo Transit Authority,,Europe/London
+
+# stops.txt
+stop_id,stop_name,stop_desc,stop_lat,stop_lon,stop_url,location_type,parent_station
+S0,S0,,,,,,
+S1,S1,,,,,,
+S2,S2,,,,,,
+S3,S3,,,,,,
+
+# calendar.txt
+service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date
+MON,1,0,0,0,0,0,0,20210301,20210307
+
+# routes.txt
+route_id,agency_id,route_short_name,route_long_name,route_desc,route_type
+R0,DTA,R0,R0,"S0 -> S1",2
+R1,DTA,R1,R1,"S1 -> S2",2
+R2,DATA,R2,R2,"S0 -> S2",2
+
+# trips.txt
+route_id,service_id,trip_id,trip_headsign,block_id
+R0,MON,R0_MON,R0_MON,1
+R1,MON,R1_MON,R1_MON,2
+R2,MON,R2_MON,R2_MON,3
+
+# stop_times.txt
+trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type
+R0_MON,01:00:00,01:00:00,S0,0,0,0
+R0_MON,01:30:00,01:30:00,S1,1,0,0
+R1_MON,02:00:00,02:00:00,S1,0,0,0
+R1_MON,02:30:00,02:30:00,S2,1,0,0
+R2_MON,01:00:00,01:00:00,S0,0,0,0
+R2_MON,03:00:00,03:00:00,S2,1,0,0
+)");
+}
+
+TEST(a_star_validation, simple_pareto_files) {
+  auto const tt = load_gtfs(simple_pareto_files);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto results_a_star = algo_search(tt, tbd, "S0", "S2",
+                                    unixtime_t{sys_days{2021_y / March / 1}});
+  EXPECT_EQ(results_a_star.size(), 1U);
+  auto result_without_transfer = algo_search(
+      tt, tbd, "S0", "S2", unixtime_t{sys_days{2021_y / March / 1}}, 31.0F);
+  EXPECT_EQ(result_without_transfer.size(), 1U);
+  result_without_transfer.add_not_optimal(results_a_star.els_.at(0));
+  auto const tb_results =
+      algo_search(tt, tbd, "S0", "S2", unixtime_t{sys_days{2021_y / March / 1}},
+                  1.0F, false);
+  for (auto i = 0U; i < result_without_transfer.size(); ++i) {
+    EXPECT_TRUE(result_without_transfer.els_.at(i) == tb_results.els_.at(i));
+  }
+}
+
 mem_dir pareto_files() {
   return mem_dir::read(R"(
 # agency.txt
@@ -125,15 +183,12 @@ TEST(a_star_validation, pareto_files) {
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
   auto results_a_star = algo_search(tt, tbd, "S0", "S2",
                                     unixtime_t{sys_days{2021_y / March / 1}});
-  EXPECT_EQ(results_a_star.size(), 1U);
+  EXPECT_EQ(results_a_star.size(), 2U);
   auto result_without_transfer = algo_search(
       tt, tbd, "S0", "S2", unixtime_t{sys_days{2021_y / March / 1}}, 31.0F);
-  EXPECT_EQ(result_without_transfer.size(), 1U);
-  result_without_transfer.add_not_optimal(results_a_star.els_.at(0));
-  auto const tb_results =
-      algo_search(tt, tbd, "S0", "S2", unixtime_t{sys_days{2021_y / March / 1}},
-                  1.0F, false);
+  EXPECT_EQ(result_without_transfer.size(), 2U);
   for (auto i = 0U; i < result_without_transfer.size(); ++i) {
-    EXPECT_TRUE(result_without_transfer.els_.at(i) == tb_results.els_.at(i));
+    EXPECT_TRUE(result_without_transfer.els_.at(i) ==
+                results_a_star.els_.at(i));
   }
 }

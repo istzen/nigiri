@@ -29,7 +29,7 @@ struct a_star_stats {
 
   std::uint64_t n_segments_reached_{0ULL};
   std::uint64_t n_dest_segments_reached_{0ULL};
-  bool use_lower_bounds_{false};
+  bool use_lower_bounds_{true};
   bool max_transfers_reached_{false};
   bool max_travel_time_reached_{false};
   bool no_journey_found_{false};

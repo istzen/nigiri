@@ -16,9 +16,6 @@
 #include "nigiri/timetable.h"
 #include "nigiri/types.h"
 
-#define as_debug fmt::println
-// #define as_debug(...)
-
 namespace nigiri {
 namespace routing {
 
@@ -62,8 +59,6 @@ a_star<UseLowerBounds>::a_star(
         for (auto const t : tt_.route_transport_ranges_[r]) {
           auto const segment = state_.tbd_.transport_first_segment_[t] + i - 1;
           state_.end_reachable_.set(segment, true);
-          as_debug("Marking segment {} as reaching dest with dist {}", segment,
-                   d.count());
 
           auto const it = state_.dist_to_dest_.find(segment);
           if (it == end(state_.dist_to_dest_)) {
@@ -113,8 +108,8 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
   uint16_t current_best_arrival = std::numeric_limits<uint16_t>::max();
   while (!state_.pq_.empty()) {
     auto const& current = state_.pq_.top();
-
-    if (state_.cost_function(current) >= current_best_arrival) {
+    auto bucket = state_.cost_function(current);
+    if (bucket >= current_best_arrival) {
       return;
     }
     state_.pq_.pop();
@@ -131,7 +126,6 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
 
     if (state_.end_reachable_.test(segment)) {
       ++stats_.n_dest_segments_reached_;
-      auto bucket = state_.cost_function(current);
       auto const it = state_.dist_to_dest_.find(segment);
       if (it != end(state_.dist_to_dest_)) {
         bucket += it->second.count();
@@ -158,21 +152,24 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
            .dest_ = location_idx_t::invalid(),
            .transfers_ = static_cast<std::uint8_t>(current.transfers_)});
     }
+
     auto const handle_new_segment = [&](segment_idx_t s, transport_idx_t t,
                                         bool transfer = false) {
       auto const to = static_cast<stop_idx_t>(
           to_idx(s - state_.tbd_.transport_first_segment_[t]) + 1);
       auto const next_stop_arr = event_day_idx_mam(t, to, event_type::kArr);
-      if (next_stop_arr.count() < worst_delta.count()) {
-        if constexpr (UseLowerBounds) {
-          state_.lb_.emplace(
-              s, lb_.at(to_idx(
-                     stop{tt_.route_location_seq_[tt_.transport_route_[t]][to]}
-                         .location_idx())));
-        }
-        state_.update_segment(
-            s, next_stop_arr, segment,
-            transfer ? current.transfers_ + 1 : current.transfers_);
+      u_int8_t const transfers =
+          transfer ? current.transfers_ + 1 : current.transfers_;
+      if constexpr (UseLowerBounds) {
+        state_.lb_.emplace(
+            s, lb_.at(to_idx(
+                   stop{tt_.route_location_seq_[tt_.transport_route_[t]][to]}
+                       .location_idx())));
+      }
+      if (next_stop_arr.count() < worst_delta.count() &&
+          state_.cost_function(queue_entry{s, transfers}, next_stop_arr) <
+              state_.pq_.n_buckets()) {
+        state_.update_segment(s, next_stop_arr, segment, transfers);
       } else {
         as_debug(
             "Next segment {} arrival time {} exceeds worst arrival time {}", s,
@@ -180,11 +177,12 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
         stats_.max_travel_time_reached_ = true;
       }
     };
+
     // Handle next segment of transport if exists
     auto const transport_idx_current = state_.tbd_.segment_transports_[segment];
     auto const next_segment = segment + 1;
     if (state_.tbd_.get_segment_range(transport_idx_current)
-            .contains(next_segment)) {
+            .contains(next_segment)) [[likely]] {
       handle_new_segment(next_segment, transport_idx_current);
     }
 
@@ -205,16 +203,22 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
 
       if (!state_.tbd_.bitfields_[transfer.traffic_days_].test(
               to_idx(current_transport_offset + base_))) {
-        as_debug("Transfer {} - {} not active on day {}", segment, new_segment,
-                 current_transport_offset);
         continue;
       }
 
       auto const transport_idx_new =
           state_.tbd_.segment_transports_[new_segment];
-      state_.transport_day_offset_.emplace(
+      auto const [_, inserted] = state_.transport_day_offset_.emplace(
           transport_idx_new,
           current_transport_offset + transfer.get_day_offset());
+      if (!inserted &&
+          state_.transport_day_offset_.at(transport_idx_new) !=
+              current_transport_offset + transfer.get_day_offset()) {
+        as_debug(
+            "Transport already visited on different day offset, skipping "
+            "transfer");
+        continue;
+      }
       handle_new_segment(new_segment, transport_idx_new, true);
     }
   }
@@ -280,9 +284,9 @@ void a_star<UseLowerBounds>::reconstruct(query const& q, journey& j) const {
                                       event_type const ev_type)
       -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
     auto const t = state_.tbd_.segment_transports_[s];
-    auto const d = base_ + state_.transport_day_offset_[t].v_;
+    auto const d = base_ + state_.transport_day_offset_.at(t).v_;
     auto const i = static_cast<stop_idx_t>(
-        to_idx(s - state_.tbd_.transport_first_segment_[t] +
+        to_idx(s - state_.tbd_.transport_first_segment_.at(t) +
                (ev_type == event_type::kArr ? 1 : 0)));
     auto const loc_seq = tt_.route_location_seq_[tt_.transport_route_[t]];
     return {{t, d},
