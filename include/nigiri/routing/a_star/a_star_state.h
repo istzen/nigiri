@@ -85,7 +85,6 @@ struct a_star_state {
     settled_segments_.zero_out();
     start_segments_.zero_out();
     arrival_time_.clear();
-    transport_day_offset_.clear();
     lb_.clear();
     start_time_ = delta{(1U << 5) - 1, (1U << 11) - 1};
   }
@@ -113,7 +112,6 @@ struct a_star_state {
   bitvec_map<segment_idx_t> start_segments_;
   float transfer_factor_;
   delta start_time_ = delta{(1U << 5) - 1, (1U << 11) - 1};
-  hash_map<transport_idx_t, day_idx_t> transport_day_offset_;
   hash_map<segment_idx_t, u_int16_t> lb_;
   bool use_lower_bounds_ = false;
 };

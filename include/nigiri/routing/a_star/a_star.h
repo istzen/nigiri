@@ -78,17 +78,12 @@ struct a_star {
 
   void reconstruct(query const& q, journey& j) const;
 
-  delta event_day_idx_mam(transport_idx_t t_idx,
+  delta event_day_idx_mam(transport t,
                           stop_idx_t const s_idx,
                           event_type const et) {
-    assert(state_.transport_day_offset_.contains(t_idx) &&
-           "invalid transport call");
-
-    auto const arr_time = tt_.event_mam(t_idx, s_idx, et);
-    return delta{
-        static_cast<std::uint16_t>(
-            arr_time.days_ + to_idx(state_.transport_day_offset_.at(t_idx))),
-        arr_time.mam_};
+    auto const arr_time = tt_.event_mam(t.t_idx_, s_idx, et);
+    return delta{static_cast<std::uint16_t>(arr_time.days_ + t.day_.v_),
+                 arr_time.mam_};
   }
 
   delta day_idx_mam(day_idx_t const day,
@@ -101,10 +96,24 @@ struct a_star {
     return day_idx_mam(d, t);
   };
 
+  day_idx_t transport_day_idx(segment_idx_t const segment,
+                              stop_idx_t const i,
+                              transport_idx_t const t) const {
+    return static_cast<day_idx_t>(state_.arrival_time_.at(segment).days() -
+                                  tt_.event_mam(t, i, event_type::kArr).days());
+  };
+
   unixtime_t segment_arrival_time(segment_idx_t const segment) const {
-    auto const arr_delta = state_.arrival_time_.at(segment);
-    return tt_.to_unixtime(base_ + arr_delta.days(),
-                           minutes_after_midnight_t{arr_delta.mam()});
+    return to_unixtime(state_.arrival_time_.at(segment));
+  };
+
+  unix_time_t segment_departure_time(segment_idx_t const segment) const {
+    auto const arr_time = state_.arrival_time_.at(segment);
+  };
+
+  unixtime_t to_unixtime(delta const& d) const {
+    return tt_.to_unixtime(base_ + d.days(),
+                           static_cast<minutes_after_midnight_t>(d.mam()));
   };
 
 private:

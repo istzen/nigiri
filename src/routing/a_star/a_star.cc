@@ -153,18 +153,16 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
            .transfers_ = static_cast<std::uint8_t>(current.transfers_)});
     }
 
-    auto const handle_new_segment = [&](segment_idx_t s, transport_idx_t t,
-                                        bool transfer = false) {
-      auto const to = static_cast<stop_idx_t>(
-          to_idx(s - state_.tbd_.transport_first_segment_[t]) + 1);
+    auto const handle_new_segment = [&](segment_idx_t s, stop_idx_t to,
+                                        transport t, bool transfer = false) {
       auto const next_stop_arr = event_day_idx_mam(t, to, event_type::kArr);
       u_int8_t const transfers =
           transfer ? current.transfers_ + 1 : current.transfers_;
       if constexpr (UseLowerBounds) {
         state_.lb_.emplace(
-            s, lb_.at(to_idx(
-                   stop{tt_.route_location_seq_[tt_.transport_route_[t]][to]}
-                       .location_idx())));
+            s, lb_.at(to_idx(stop{
+                   tt_.route_location_seq_[tt_.transport_route_[t.t_idx_]][to]}
+                                 .location_idx())));
       }
       if (next_stop_arr.count() < worst_delta.count() &&
           state_.cost_function(queue_entry{s, transfers}, next_stop_arr) <
@@ -181,9 +179,17 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
     // Handle next segment of transport if exists
     auto const transport_idx_current = state_.tbd_.segment_transports_[segment];
     auto const next_segment = segment + 1;
+    auto const current_stop_idx = static_cast<stop_idx_t>(
+        to_idx(segment -
+               state_.tbd_.transport_first_segment_[transport_idx_current]) +
+        1);
+    auto const current_transport_offset =
+        transport_day_idx(segment, current_stop_idx, transport_idx_current);
     if (state_.tbd_.get_segment_range(transport_idx_current)
             .contains(next_segment)) [[likely]] {
-      handle_new_segment(next_segment, transport_idx_current);
+      handle_new_segment(
+          next_segment, current_stop_idx + 1,
+          transport{transport_idx_current, current_transport_offset});
     }
 
     // Handle transfers
@@ -198,8 +204,6 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
       if (state_.settled_segments_.test(new_segment)) {
         continue;
       }
-      auto const current_transport_offset =
-          state_.transport_day_offset_.at(transport_idx_current);
 
       if (!state_.tbd_.bitfields_[transfer.traffic_days_].test(
               to_idx(current_transport_offset + base_))) {
@@ -208,18 +212,14 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
 
       auto const transport_idx_new =
           state_.tbd_.segment_transports_[new_segment];
-      auto const [_, inserted] = state_.transport_day_offset_.emplace(
-          transport_idx_new,
-          current_transport_offset + transfer.get_day_offset());
-      if (!inserted &&
-          state_.transport_day_offset_.at(transport_idx_new) !=
-              current_transport_offset + transfer.get_day_offset()) {
-        as_debug(
-            "Transport already visited on different day offset, skipping "
-            "transfer");
-        continue;
-      }
-      handle_new_segment(new_segment, transport_idx_new, true);
+      handle_new_segment(
+          new_segment,
+          static_cast<stop_idx_t>(to_idx(
+              new_segment -
+              state_.tbd_.transport_first_segment_[transport_idx_new] + 1)),
+          transport{transport_idx_new,
+                    current_transport_offset + transfer.get_day_offset()},
+          true);
     }
   }
   stats_.no_journey_found_ = results.empty();
@@ -243,20 +243,20 @@ void a_star<UseLowerBounds>::add_start(location_idx_t l, unixtime_t t) {
         continue;
       }
 
-      auto const transport_day_offset = to_idx(et.day_) - to_idx(base_);
-      if (transport_day_offset < 0 || transport_day_offset > kASMaxDayOffset) {
+      auto const transport_day_offset = et.day_ - base_;
+      if (transport_day_offset.v_ < 0 ||
+          transport_day_offset.v_ > kASMaxDayOffset) {
         continue;
       }
-      state_.transport_day_offset_.emplace(et.t_idx_, transport_day_offset);
-      auto const arr_time = event_day_idx_mam(
-          et.t_idx_, static_cast<stop_idx_t>(i + 1), event_type::kArr);
+      auto const arr_time =
+          event_day_idx_mam(transport{et.t_idx_, transport_day_offset},
+                            static_cast<stop_idx_t>(i + 1), event_type::kArr);
       auto const start_segment =
           state_.tbd_.transport_first_segment_[et.t_idx_] + i;
       state_.arrival_time_.emplace(start_segment, arr_time);
       state_.start_segments_.set(start_segment);
       as_debug("Adding start segment {} for location {}", start_segment,
                location{tt_, l});
-      state_.transport_day_offset_.emplace(et.t_idx_, et.day_ - base_);
       if constexpr (UseLowerBounds) {
         state_.lb_.emplace(
             start_segment,
@@ -282,16 +282,21 @@ void a_star<UseLowerBounds>::reconstruct(query const& q, journey& j) const {
   auto const get_transport_info = [&](segment_idx_t const s,
                                       event_type const ev_type)
       -> std::tuple<transport, stop_idx_t, location_idx_t, unixtime_t> {
+    auto const arr_time = state_.arrival_time_.at(s);
     auto const t = state_.tbd_.segment_transports_[s];
-    auto const d = base_ + state_.transport_day_offset_.at(t).v_;
-    auto const i = static_cast<stop_idx_t>(
-        to_idx(s - state_.tbd_.transport_first_segment_.at(t) +
-               (ev_type == event_type::kArr ? 1 : 0)));
+    auto i = static_cast<stop_idx_t>(
+        to_idx(s - state_.tbd_.transport_first_segment_.at(t) + 1));
+    auto const d =
+        base_ + arr_time.days() - tt_.event_mam(t, i, event_type::kArr).days();
     auto const loc_seq = tt_.route_location_seq_[tt_.transport_route_[t]];
+    if (ev_type == event_type::kDep) {
+      --i;
+    }
     return {{t, d},
             i,
             stop{loc_seq[i]}.location_idx(),
-            tt_.event_time({t, d}, i, ev_type)};
+            ev_type == event_type::kArr ? to_unixtime(arr_time)
+                                        : tt_.event_time({t, d}, i, ev_type)};
   };
 
   auto const get_fp = [&](location_idx_t const from, location_idx_t const to) {
