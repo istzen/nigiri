@@ -84,8 +84,6 @@ struct benchmark_result {
         << std::chrono::duration_cast<double_seconds_t>(
                br.routing_result_.search_stats_.execute_time_)
                .count()
-        << "s, t_a_star_exec: " << std::setw(9)
-        << br.routing_result_.algo_stats_.at("execute_time")
         << "s, intvl_ext: " << std::setw(2)
         << br.routing_result_.search_stats_.interval_extensions_
         << ", intvl_size: " << std::setw(5)
@@ -153,23 +151,39 @@ void process_queries(
     struct query_state {
       search_state ss_;
     };
-    auto started_bitvec = bitvec(queries.size());
-    auto finished_bitvec = bitvec(queries.size());
+    // for (auto q_idx = 0U; q_idx != queries.size(); ++q_idx) {
+    //   std::cout << "Processing query " << q_idx << "/" << queries.size()
+    //             << "\n";
+    //   search_state ss = search_state{};
+    //   try {
+    //     auto const total_time_start_a_star =
+    //     std::chrono::steady_clock::now(); auto a_star_s =
+    //     nigiri::routing::a_star_state{tbd}; auto const result =
+    //         routing::a_star_search(tt, ss, a_star_s, queries[q_idx].q_);
+    //     auto const total_time_stop_a_star = std::chrono::steady_clock::now();
+    //     auto const guard = std::lock_guard{mutex};
+    //     results.emplace_back(benchmark_result{
+    //         q_idx, result, *(result.journeys_),
+    //         std::chrono::duration_cast<std::chrono::milliseconds>(
+    //             total_time_stop_a_star - total_time_start_a_star)});
+    //     progress_tracker->increment();
+    //   } catch (std::exception const& e) {
+    //     std::cout << "Exception caught: " << e.what() << "\n";
+    //   }
+    // };
     utl::parallel_for_run_threadlocal<query_state>(
         queries.size(), [&](auto& query_state, auto const q_idx) {
           try {
-            auto const total_time_start_a_star =
-                std::chrono::steady_clock::now();
+            auto const total_time_start = std::chrono::steady_clock::now();
             auto a_star_s = nigiri::routing::a_star_state{tbd};
             auto const result = routing::a_star_search(
                 tt, query_state.ss_, a_star_s, queries[q_idx].q_);
-            auto const total_time_stop_a_star =
-                std::chrono::steady_clock::now();
+            auto const total_time_stop = std::chrono::steady_clock::now();
             auto const guard = std::lock_guard{mutex};
             results.emplace_back(benchmark_result{
-                q_idx, result, *(result.journeys_),
+                q_idx, result, *result.journeys_,
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    total_time_stop_a_star - total_time_start_a_star)});
+                    total_time_stop - total_time_start)});
             progress_tracker->increment();
           } catch (std::exception const& e) {
             std::cout << "Exception caught: " << e.what() << "\n";
@@ -215,6 +229,7 @@ void print_results(
   utl::sort(results, [](auto const& a, auto const& b) {
     return a.total_time_ < b.total_time_;
   });
+  std::cout << "\n=== Results size: " << results.size() << " ===\n";
   print_result(results, "total_time");
 
   auto const visit_coord = [](geo::latlng const& coord) {

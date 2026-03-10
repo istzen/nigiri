@@ -59,10 +59,10 @@ struct a_star_state {
 
   // Cost function used when a bucket is computed
   uint16_t cost_function(queue_entry const& qe, delta arr) const {
-    if (use_lower_bounds_) {
-      arr.mam_ += lb_.at(qe.segment_);
-    }
-    return cost_function(arr.days(), arr.mam(), qe.transfers_);
+    return cost_function(
+        arr.days(),
+        use_lower_bounds_ ? arr.mam() + lb_.at(qe.segment_) : arr.mam(),
+        qe.transfers_);
   }
 
   void update_segment(segment_idx_t const s,
@@ -104,6 +104,8 @@ struct a_star_state {
     start_segments_.zero_out();
     arrival_time_.clear();
     arrival_day_.clear();
+    transport_day_offset_.clear();
+    lb_.clear();
     start_time_ = std::numeric_limits<uint16_t>::max();
     start_day_ = std::numeric_limits<uint16_t>::max();
   }
