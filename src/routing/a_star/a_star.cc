@@ -252,8 +252,7 @@ void a_star<UseLowerBounds>::add_start(location_idx_t l, unixtime_t t) {
           et.t_idx_, static_cast<stop_idx_t>(i + 1), event_type::kArr);
       auto const start_segment =
           state_.tbd_.transport_first_segment_[et.t_idx_] + i;
-      state_.arrival_day_.emplace(start_segment, arr_time.days());
-      state_.arrival_time_.emplace(start_segment, arr_time.mam());
+      state_.arrival_time_.emplace(start_segment, arr_time);
       state_.start_segments_.set(start_segment);
       as_debug("Adding start segment {} for location {}", start_segment,
                location{tt_, l});
@@ -478,8 +477,6 @@ void a_star<UseLowerBounds>::reconstruct(query const& q, journey& j) const {
   }
 }
 
-// Explicit template instantiations so the methods are emitted for both
-// UseLowerBounds=false and UseLowerBounds=true (linker needs these symbols).
 template struct a_star<false>;
 template struct a_star<true>;
 

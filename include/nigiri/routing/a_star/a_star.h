@@ -102,12 +102,9 @@ struct a_star {
   };
 
   unixtime_t segment_arrival_time(segment_idx_t const segment) const {
-    assert(state_.arrival_day_.contains(segment) &&
-           "segment has no arrival time");
-
-    auto const day_idx = state_.arrival_day_.at(segment);
-    auto const time = state_.arrival_time_.at(segment);
-    return tt_.to_unixtime(base_ + day_idx.v_, time);
+    auto const arr_delta = state_.arrival_time_.at(segment);
+    return tt_.to_unixtime(base_ + arr_delta.days(),
+                           minutes_after_midnight_t{arr_delta.mam()});
   };
 
 private:

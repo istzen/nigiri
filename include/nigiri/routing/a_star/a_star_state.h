@@ -12,8 +12,7 @@ namespace nigiri::routing {
 
 using tb_data = tb::tb_data;
 using segment_idx_t = tb::segment_idx_t;
-using arrival_time_map = hash_map<segment_idx_t, minutes_after_midnight_t>;
-using day_index_map = hash_map<segment_idx_t, day_idx_t>;
+using arrival_time_map = hash_map<segment_idx_t, delta>;
 using pred_table = hash_map<segment_idx_t, segment_idx_t>;
 
 struct queue_entry {
@@ -35,64 +34,47 @@ struct a_star_state {
     start_segments_.resize(tbd.segment_transfers_.size());
   }
 
-  bool better_arrival(queue_entry qe, delta const new_arr) {
-    return !arrival_day_.contains(qe.segment_) ||
+  bool better_arrival(queue_entry const& qe, delta const& new_arr) {
+    return !arrival_time_.contains(qe.segment_) ||
            cost_function(qe, new_arr) < cost_function(qe);
   }
 
-  // Standard cost function used in pq
+  // cost function used in pq
   uint16_t cost_function(queue_entry const& qe) const {
-    // * Debug asserts
-    assert(arrival_day_.contains(qe.segment_));
-    assert(arrival_time_.contains(qe.segment_));
-    if (use_lower_bounds_) {
-      assert(lb_.contains(qe.segment_));
-    }
-    auto const val = cost_function(
-        to_idx(arrival_day_.at(qe.segment_)),
-        use_lower_bounds_
-            ? lb_.at(qe.segment_) + arrival_time_.at(qe.segment_).count()
-            : arrival_time_.at(qe.segment_).count(),
-        qe.transfers_);
-    return val;
+    return cost_function(qe, arrival_time_.at(qe.segment_));
   }
 
   // Cost function used when a bucket is computed
-  uint16_t cost_function(queue_entry const& qe, delta arr) const {
-    return cost_function(
-        arr.days(),
-        use_lower_bounds_ ? arr.mam() + lb_.at(qe.segment_) : arr.mam(),
-        qe.transfers_);
+  uint16_t cost_function(queue_entry const& qe, delta const& arr) const {
+    return (use_lower_bounds_
+                ? (arr - start_time_).count() + lb_.at(qe.segment_)
+                : (arr - start_time_).count()) +
+           static_cast<uint16_t>(transfer_factor_ * qe.transfers_);
   }
 
   void update_segment(segment_idx_t const s,
-                      delta const new_arr,
-                      segment_idx_t pred,
-                      uint8_t transfers) {
-    if (better_arrival(queue_entry{s, transfers}, new_arr)) {
-      arrival_day_.insert_or_assign(s, day_idx_t{new_arr.days()});
-      arrival_time_.insert_or_assign(s,
-                                     minutes_after_midnight_t{new_arr.mam()});
-
+                      delta const& new_arr,
+                      segment_idx_t const pred,
+                      uint8_t const transfers) {
+    auto const qe = queue_entry{s, transfers};
+    if (better_arrival(qe, new_arr)) {
+      arrival_time_.insert_or_assign(s, new_arr);
       pred_table_.insert_or_assign(s, pred);
-      pq_.push(queue_entry{s, transfers});
+      pq_.push(std::move(qe));
     }
   };
 
   void setup(delta const start_delta, uint8_t max_transfers) {
-    assert(start_time_ == std::numeric_limits<uint16_t>::max() &&
-           start_day_ == std::numeric_limits<uint16_t>::max() &&
-           "state has not been proberly reset before setup");
-    start_time_ = start_delta.mam();
-    start_day_ = start_delta.days();
+    start_time_ = std::move(start_delta);
     pq_.n_buckets(maxASTravelTime.count() +
                   std::ceil(max_transfers * transfer_factor_));
     start_segments_.for_each_set_bit([&](segment_idx_t const s) {
-      if (cost_function(queue_entry{s, 0}) >= pq_.n_buckets()) {
+      auto const qe = queue_entry{s, 0};
+      if (cost_function(qe) >= pq_.n_buckets()) {
         as_debug("Skipping start segment {} as its cost is too high", s);
         return;
       }
-      pq_.push(queue_entry{s, 0});
+      pq_.push(std::move(qe));
       pred_table_.emplace(s, startSegmentPredecessor);
     });
   }
@@ -103,11 +85,9 @@ struct a_star_state {
     settled_segments_.zero_out();
     start_segments_.zero_out();
     arrival_time_.clear();
-    arrival_day_.clear();
     transport_day_offset_.clear();
     lb_.clear();
-    start_time_ = std::numeric_limits<uint16_t>::max();
-    start_day_ = std::numeric_limits<uint16_t>::max();
+    start_time_ = delta{(1U << 5) - 1, (1U << 11) - 1};
   }
 
   struct get_bucket_a_star {
@@ -125,7 +105,6 @@ struct a_star_state {
 
   tb_data const& tbd_;
   arrival_time_map arrival_time_;
-  day_index_map arrival_day_;
   pred_table pred_table_;
   hash_map<segment_idx_t, duration_t> dist_to_dest_;
   dial<queue_entry, get_bucket_a_star> pq_;
@@ -133,21 +112,9 @@ struct a_star_state {
   bitvec_map<segment_idx_t> settled_segments_;
   bitvec_map<segment_idx_t> start_segments_;
   float transfer_factor_;
-  uint16_t start_day_ = std::numeric_limits<uint16_t>::max();
-  uint16_t start_time_ = std::numeric_limits<uint16_t>::max();
+  delta start_time_ = delta{(1U << 5) - 1, (1U << 11) - 1};
   hash_map<transport_idx_t, day_idx_t> transport_day_offset_;
   hash_map<segment_idx_t, u_int16_t> lb_;
   bool use_lower_bounds_ = false;
-
-private:
-  // Refactored part of cost function
-  uint16_t cost_function(uint16_t const days,
-                         uint16_t const mam,
-                         uint8_t const transfers) const {
-    auto const val = (days - start_day_) * 24 * 60 + mam - start_time_ +
-                     transfer_factor_ * transfers;
-    assert(val >= 0 && "Cost function should always be positive or zero");
-    return val;
-  }
 };
 }  // namespace nigiri::routing
