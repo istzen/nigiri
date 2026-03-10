@@ -121,8 +121,8 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
     state_.settled_segments_.set(segment, true);
     ++stats_.n_segments_reached_;
 
-    as_debug("Visiting segment {} with transfers {}", segment,
-             current.transfers_);
+    as_debug("Visiting segment {} with transfers {} and bucket {}", segment,
+             current.transfers_, bucket);
 
     if (state_.end_reachable_.test(segment)) {
       ++stats_.n_dest_segments_reached_;
