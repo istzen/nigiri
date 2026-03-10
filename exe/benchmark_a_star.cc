@@ -174,8 +174,8 @@ void process_queries(
     utl::parallel_for_run_threadlocal<query_state>(
         queries.size(), [&](auto& query_state, auto const q_idx) {
           try {
-            auto const total_time_start = std::chrono::steady_clock::now();
             auto a_star_s = nigiri::routing::a_star_state{tbd};
+            auto const total_time_start = std::chrono::steady_clock::now();
             auto const result = routing::a_star_search(
                 tt, query_state.ss_, a_star_s, queries[q_idx].q_);
             auto const total_time_stop = std::chrono::steady_clock::now();
@@ -225,7 +225,8 @@ void print_results(
     std::vector<benchmark_result>& results,
     nigiri::timetable const& tt,
     nigiri::query_generation::generator_settings const& gs,
-    std::filesystem::path const& tt_path) {
+    std::filesystem::path const& tt_path,
+    std::filesystem::path const& tbd_path) {
   utl::sort(results, [](auto const& a, auto const& b) {
     return a.total_time_ < b.total_time_;
   });
@@ -267,7 +268,8 @@ void print_results(
   auto ss = std::stringstream{};
   ss << "Re-run the slowest source-destination "
         "combination:\n./nigiri-benchmark_astar -p "
-     << tt_path.string() << " -n 1 -i " << gs.interval_size_.count();
+     << tt_path.string() << " -d " << tbd_path.string() << " -n 1 -i "
+     << gs.interval_size_.count();
   if (gs.start_match_mode_ == location_match_mode::kIntermodal) {
     ss << " --start_mode intermodal --intermodal_start "
        << to_string(gs.start_mode_).value();
@@ -339,6 +341,7 @@ int main(int argc, char* argv[]) {
   namespace bpo = boost::program_options;
 
   auto tt_path = std::filesystem::path{};
+  auto tbd_path = std::filesystem::path{};
   auto n_queries = std::uint32_t{100U};
   auto gs = query_generation::generator_settings{};
   auto interval_size = duration_t::rep{};
@@ -361,6 +364,8 @@ int main(int argc, char* argv[]) {
   desc.add_options()("help,h", "produce this help message")  //
       ("tt_path,p", bpo::value(&tt_path)->required(),
        "path to a binary file containing a serialized nigiri timetable")  //
+      ("tbd_path,d", bpo::value(&tbd_path)->required(),
+       "path to a binary file containing preprocessed tb data")  //
       ("seed,s", bpo::value<std::int64_t>(&seed),
        "value to seed the RNG of the query generator with, "
        "omit for random seed")  //
@@ -444,15 +449,8 @@ int main(int argc, char* argv[]) {
   std::cout << "loading timetable...\n";
   auto tt = *nigiri::timetable::read(tt_path);
   tt.resolve();
-  std::cout << "routes: " << tt.n_routes() << "\n";
-  std::cout << "Timetable interval: " << tt.internal_interval().from_ << " to "
-            << tt.internal_interval().to_ << "\n";
-  // auto const progress_tracker = utl::activate_progress_tracker("benchmark");
   std::cout << "loading preprocessed data...\n";
-  // auto const tbd = tb::preprocess(tt, profile_idx_t{0U});
-  // cista::write("tb_data_french_zip.bin", tbd);
-  auto const tbd = *cista::read<tb::tb_data>("tb_data_french_zip.bin");
-  std::cout << "preprocessing done\n";
+  auto const tbd = *cista::read<tb::tb_data>(tbd_path);
 
   gs.interval_size_ = duration_t{interval_size};
 
@@ -558,7 +556,7 @@ int main(int argc, char* argv[]) {
   auto results = std::vector<benchmark_result>{};
   process_queries(queries, results, tt, tbd);
 
-  print_results(queries, results, tt, gs, tt_path);
+  print_results(queries, results, tt, gs, tt_path, tbd_path);
 
   print_memory_usage();
 
