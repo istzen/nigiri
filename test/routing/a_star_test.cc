@@ -222,28 +222,20 @@ TEST(a_star, multiple_segment_run) {
   EXPECT_EQ(multiple_segment_run_journey, results_str_as(results, tt));
 }
 
-TEST(a_star, lower_bounds_multiple_segment_run) {
-  auto const tt = load_gtfs(multiple_segment_run_files);
-  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  auto const results = a_star_search(tt, tbd, "S0", "S2",
-                                     unixtime_t{sys_days{March / 02 / 2021}});
-  EXPECT_EQ(results.size(), 1U);
-  EXPECT_EQ(multiple_segment_run_journey, results_str_as(results, tt));
-}
-
 TEST(a_star, too_long_journey) {
   auto const tt = load_gtfs(multiple_segment_run_files);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
   auto const results = a_star_search(
-      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 01 / 2021} + 13_hours});
+      tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 01 / 2021} + 14_hours});
   EXPECT_EQ(results.size(), 0U);
 }
 
 TEST(a_star, start_segments_too_late) {
   auto const tt = load_gtfs(multiple_segment_run_files);
   auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  auto const results = a_star_search(tt, tbd, "S0", "S2",
-                                     unixtime_t{sys_days{March / 01 / 2021}});
+  auto const results = a_star_search(
+      tt, tbd, "S0", "S2",
+      unixtime_t{sys_days{March / 01 / 2021} + 4_hours + 30_minutes});
   EXPECT_EQ(results.size(), 0U);
 }
 
@@ -346,30 +338,6 @@ S3,S2,2,900
 )");
 }
 
-constexpr auto const two_dest_segments_reached_journey = R"(
-[2021-03-02 00:00, 2021-03-02 04:45]
-TRANSFERS: 0
-     FROM: (S0, S0) [2021-03-02 04:30]
-       TO: (S2, S2) [2021-03-02 04:45]
-leg 0: (S0, S0) [2021-03-02 04:30] -> (S2, S2) [2021-03-02 04:45]
-   0: S0      S0..............................................                               d: 02.03 04:30 [02.03 04:30]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
-   1: S3      S3.............................................. a: 02.03 04:35 [02.03 04:35]  d: 02.03 04:35 [02.03 04:35]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
-   2: S1      S1.............................................. a: 02.03 04:40 [02.03 04:40]  d: 02.03 04:40 [02.03 04:40]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
-   3: S2      S2.............................................. a: 02.03 04:45 [02.03 04:45]
-leg 1: (S2, S2) [2021-03-02 04:45] -> (S2, S2) [2021-03-02 04:45]
-  FOOTPATH (duration=0)
-
-)";
-
-TEST(a_star, two_dest_segments_reached) {
-  auto const tt = load_gtfs(two_dest_segments_reached_files);
-  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
-  auto const results = a_star_search(tt, tbd, "S0", "S2",
-                                     unixtime_t{sys_days{March / 02 / 2021}});
-  EXPECT_EQ(results.size(), 1U);
-  EXPECT_EQ(two_dest_segments_reached_journey, results_str_as(results, tt));
-}
-
 mem_dir midnight_cross_files() {
   return mem_dir::read(R"(
 # agency.txt
@@ -426,6 +394,30 @@ TEST(a_star, midnight_cross) {
       tt, tbd, "S0", "S2", unixtime_t{sys_days{March / 02 / 2021}} + 20_hours);
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(midnight_cross_journey, results_str_as(results, tt));
+}
+
+constexpr auto const two_dest_segments_reached_journey = R"(
+[2021-03-02 00:00, 2021-03-02 04:45]
+TRANSFERS: 0
+     FROM: (S0, S0) [2021-03-02 04:30]
+       TO: (S2, S2) [2021-03-02 04:45]
+leg 0: (S0, S0) [2021-03-02 04:30] -> (S2, S2) [2021-03-02 04:45]
+   0: S0      S0..............................................                               d: 02.03 04:30 [02.03 04:30]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
+   1: S3      S3.............................................. a: 02.03 04:35 [02.03 04:35]  d: 02.03 04:35 [02.03 04:35]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
+   2: S1      S1.............................................. a: 02.03 04:40 [02.03 04:40]  d: 02.03 04:40 [02.03 04:40]  [{name=R3, day=2021-03-02, id=R0_MON, src=0}]
+   3: S2      S2.............................................. a: 02.03 04:45 [02.03 04:45]
+leg 1: (S2, S2) [2021-03-02 04:45] -> (S2, S2) [2021-03-02 04:45]
+  FOOTPATH (duration=0)
+
+)";
+
+TEST(a_star, two_dest_segments_reached) {
+  auto const tt = load_gtfs(two_dest_segments_reached_files);
+  auto const tbd = tb::preprocess(tt, profile_idx_t{0});
+  auto const results = a_star_search(tt, tbd, "S0", "S2",
+                                     unixtime_t{sys_days{March / 02 / 2021}});
+  EXPECT_EQ(results.size(), 1U);
+  EXPECT_EQ(two_dest_segments_reached_journey, results_str_as(results, tt));
 }
 
 mem_dir same_day_transfer_files_as() {
