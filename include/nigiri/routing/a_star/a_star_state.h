@@ -35,8 +35,10 @@ struct a_star_state {
   }
 
   bool better_arrival(queue_entry const& qe, delta const& new_arr) {
-    return !arrival_time_.contains(qe.segment_) ||
-           cost_function(qe, new_arr) < cost_function(qe);
+    auto const cost = cost_function(qe, new_arr);
+    return arrival_time_.contains(qe.segment_)
+               ? cost < cost_function(qe)
+               : cost < worst_cost_ + transfer_factor_ * qe.transfers_;
   }
 
   // cost function used in pq
@@ -64,13 +66,15 @@ struct a_star_state {
     }
   };
 
-  void setup(delta const start_delta, uint8_t max_transfers) {
+  void setup(delta const start_delta,
+             uint16_t const worst_cost,
+             uint8_t max_transfers) {
     start_time_ = std::move(start_delta);
-    pq_.n_buckets(maxASTravelTime.count() +
-                  std::ceil(max_transfers * transfer_factor_));
+    worst_cost_ = worst_cost;
+    pq_.n_buckets(worst_cost + std::ceil(max_transfers * transfer_factor_));
     start_segments_.for_each_set_bit([&](segment_idx_t const s) {
       auto const qe = queue_entry{s, 0};
-      if (cost_function(qe) >= pq_.n_buckets()) {
+      if (cost_function(qe) >= worst_cost) {
         as_debug("Skipping start segment {} as its cost is too high", s);
         return;
       }
@@ -112,6 +116,7 @@ struct a_star_state {
   bitvec_map<segment_idx_t> start_segments_;
   float transfer_factor_;
   delta start_time_ = delta{(1U << 5) - 1, (1U << 11) - 1};
+  uint16_t worst_cost_;
   hash_map<segment_idx_t, u_int16_t> lb_;
   bool use_lower_bounds_ = false;
 };

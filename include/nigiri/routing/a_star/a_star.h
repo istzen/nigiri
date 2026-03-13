@@ -107,10 +107,6 @@ struct a_star {
     return to_unixtime(state_.arrival_time_.at(segment));
   };
 
-  unix_time_t segment_departure_time(segment_idx_t const segment) const {
-    auto const arr_time = state_.arrival_time_.at(segment);
-  };
-
   unixtime_t to_unixtime(delta const& d) const {
     return tt_.to_unixtime(base_ + d.days(),
                            static_cast<minutes_after_midnight_t>(d.mam()));

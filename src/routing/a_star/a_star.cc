@@ -98,14 +98,14 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
                                      pareto_set<journey>& results) {
   auto const results_size_before = results.size();
   auto const start_delta = day_idx_mam(start_time);
-  state_.setup(start_delta, max_transfers);
-  // TODO: think about this comparison as the min should not work proberly since
-  // the delta < operator works weird
-  delta const worst_delta =
-      std::min(day_idx_mam(worst_time_at_dest),
-               delta(maxASTravelTime.count() + start_delta.count()));
+  uint16_t const worst_cost =
+      std::min(day_idx_mam(worst_time_at_dest) - start_delta,
+               delta(maxASTravelTime))
+          .count();
+  state_.setup(start_delta, worst_cost, max_transfers);
 
-  uint16_t current_best_arrival = std::numeric_limits<uint16_t>::max();
+  uint16_t current_best_arrival =
+      worst_cost + std::ceil(max_transfers * state_.transfer_factor_);
   while (!state_.pq_.empty()) {
     auto const& current = state_.pq_.top();
     auto bucket = state_.cost_function(current);
@@ -130,7 +130,11 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
       if (it != end(state_.dist_to_dest_)) {
         bucket += it->second.count();
       }
-      if (bucket >= current_best_arrival) {
+      if (bucket >=
+          std::min(current_best_arrival,
+                   static_cast<uint16_t>(
+                       (worst_cost + std::ceil(current.transfers_ *
+                                               state_.transfer_factor_))))) {
         continue;
       }
       current_best_arrival = bucket;
@@ -156,24 +160,15 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
     auto const handle_new_segment = [&](segment_idx_t s, stop_idx_t to,
                                         transport t, bool transfer = false) {
       auto const next_stop_arr = event_day_idx_mam(t, to, event_type::kArr);
-      u_int8_t const transfers =
-          transfer ? current.transfers_ + 1 : current.transfers_;
       if constexpr (UseLowerBounds) {
         state_.lb_.emplace(
             s, lb_.at(to_idx(stop{
                    tt_.route_location_seq_[tt_.transport_route_[t.t_idx_]][to]}
                                  .location_idx())));
       }
-      if (next_stop_arr.count() < worst_delta.count() &&
-          state_.cost_function(queue_entry{s, transfers}, next_stop_arr) <
-              state_.pq_.n_buckets()) {
-        state_.update_segment(s, next_stop_arr, segment, transfers);
-      } else {
-        as_debug(
-            "Next segment {} arrival time {} exceeds worst arrival time {}", s,
-            next_stop_arr, worst_delta);
-        stats_.max_travel_time_reached_ = true;
-      }
+      state_.update_segment(
+          s, next_stop_arr, segment,
+          transfer ? current.transfers_ + 1 : current.transfers_);
     };
 
     // Handle next segment of transport if exists
