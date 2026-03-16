@@ -41,12 +41,10 @@ struct a_star_state {
                : cost < worst_cost_ + transfer_factor_ * qe.transfers_;
   }
 
-  // cost function used in pq
   uint16_t cost_function(queue_entry const& qe) const {
     return cost_function(qe, arrival_time_.at(qe.segment_));
   }
 
-  // Cost function used when a bucket is computed
   uint16_t cost_function(queue_entry const& qe, delta const& arr) const {
     return (use_lower_bounds_
                 ? (arr - start_time_).count() + lb_.at(qe.segment_)
@@ -76,10 +74,10 @@ struct a_star_state {
       auto const qe = queue_entry{s, 0};
       if (cost_function(qe) >= worst_cost) {
         as_debug("Skipping start segment {} as its cost is too high", s);
-        return;
+      } else {
+        pq_.push(std::move(qe));
+        pred_table_.emplace(s, startSegmentPredecessor);
       }
-      pq_.push(std::move(qe));
-      pred_table_.emplace(s, startSegmentPredecessor);
     });
   }
 

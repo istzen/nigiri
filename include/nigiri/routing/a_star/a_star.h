@@ -96,17 +96,6 @@ struct a_star {
     return day_idx_mam(d, t);
   };
 
-  day_idx_t transport_day_idx(segment_idx_t const segment,
-                              stop_idx_t const i,
-                              transport_idx_t const t) const {
-    return static_cast<day_idx_t>(state_.arrival_time_.at(segment).days() -
-                                  tt_.event_mam(t, i, event_type::kArr).days());
-  };
-
-  unixtime_t segment_arrival_time(segment_idx_t const segment) const {
-    return to_unixtime(state_.arrival_time_.at(segment));
-  };
-
   unixtime_t to_unixtime(delta const& d) const {
     return tt_.to_unixtime(base_ + d.days(),
                            static_cast<minutes_after_midnight_t>(d.mam()));

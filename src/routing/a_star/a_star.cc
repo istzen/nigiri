@@ -138,7 +138,7 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
         continue;
       }
       current_best_arrival = bucket;
-      auto dest_time = segment_arrival_time(segment);
+      auto dest_time = to_unixtime(state_.arrival_time_.at(segment));
 
       if (it != end(state_.dist_to_dest_)) {
         dest_time += it->second;
@@ -178,8 +178,10 @@ void a_star<UseLowerBounds>::execute(unixtime_t const start_time,
         to_idx(segment -
                state_.tbd_.transport_first_segment_[transport_idx_current]) +
         1);
-    auto const current_transport_offset =
-        transport_day_idx(segment, current_stop_idx, transport_idx_current);
+    auto const current_transport_offset = static_cast<day_idx_t>(
+        state_.arrival_time_.at(segment).days() -
+        tt_.event_mam(transport_idx_current, current_stop_idx, event_type::kArr)
+            .days());
     if (state_.tbd_.get_segment_range(transport_idx_current)
             .contains(next_segment)) [[likely]] {
       handle_new_segment(

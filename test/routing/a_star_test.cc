@@ -924,9 +924,6 @@ TEST(a_star, intermodal_abc) {
             {.id_ = "0000003", .src_ = source_idx_t{0U}}),
         15_minutes, 77U}},
       unixtime_t{sys_days{March / 30 / 2020} + 5_hours});
-  for (auto const& result : results) {
-    result.print(std::cout, tt);
-  }
   EXPECT_EQ(results.size(), 1U);
   EXPECT_EQ(std::string_view{intermodal_abc_journey},
             results_str_as(results, tt));
@@ -983,9 +980,6 @@ TEST(a_star, intermodal_abc_interval_start_time) {
         15_minutes, 77U}},
       interval{unixtime_t{sys_days{March / 30 / 2020}} + 5_hours,
                unixtime_t{sys_days{March / 30 / 2020}} + 6_hours});
-  for (auto const& result : results) {
-    result.print(std::cout, tt);
-  }
   EXPECT_EQ(results.size(), 2U);
   EXPECT_EQ(std::string_view{intermodal_abc_journeys},
             results_str_as(results, tt));
